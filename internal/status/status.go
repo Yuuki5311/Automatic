@@ -29,12 +29,24 @@ const (
 type Snapshot struct {
 	DaemonState DaemonState `json:"daemon_state"`
 	Phase       Phase       `json:"phase"`
+	LoginPhase  LoginPhase  `json:"login_phase"`  // 独立登录进度（与抓取 phase 解耦）
+	LoginError  string      `json:"login_error,omitempty"`
 	Cookie      CookieInfo  `json:"cookie"`
 	CurrentRun  *RunInfo    `json:"current_run,omitempty"`
 	LastRun     *RunInfo    `json:"last_run,omitempty"`
 	Games       []GameResult `json:"games"`
 	ServerTime  time.Time   `json:"server_time"`
 }
+
+// LoginPhase UI 触发的登录进度。
+type LoginPhase string
+
+const (
+	LoginIdle      LoginPhase = "idle"
+	LoginRunning   LoginPhase = "running"
+	LoginSuccess   LoginPhase = "success"
+	LoginFailed    LoginPhase = "failed"
+)
 
 // CookieInfo Cookie 状态。
 type CookieInfo struct {
@@ -77,8 +89,17 @@ func NewStore() *Store {
 		snap: Snapshot{
 			DaemonState: DaemonStopped,
 			Phase:       PhaseIdle,
+			LoginPhase:  LoginIdle,
 		},
 	}
+}
+
+// SetLoginPhase 设置 UI 触发的登录进度。
+func (s *Store) SetLoginPhase(p LoginPhase, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snap.LoginPhase = p
+	s.snap.LoginError = errMsg
 }
 
 // SetDaemonState 设置守护进程状态。
