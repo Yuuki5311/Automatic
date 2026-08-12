@@ -150,8 +150,8 @@ func (m *Manager) scrapeViaAPI(ctx context.Context, game config.GameConfig, tabl
 	if m.apiClient == nil {
 		return nil, fmt.Errorf("API客户端未初始化（配置缺失）")
 	}
-	if !m.apiClient.ProbeAPI(ctx) {
-		return nil, fmt.Errorf("API探测失败")
+	if err := m.apiClient.ProbeAPI(ctx); err != nil {
+		return nil, fmt.Errorf("API探测失败: %w", err)
 	}
 	return m.apiClient.FetchRecycleOrders(ctx, game.Name, tableIndex)
 }

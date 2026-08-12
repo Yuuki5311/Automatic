@@ -127,9 +127,10 @@ func TestScrapeGameTable_APIModeSuccess(t *testing.T) {
 	}
 
 	// API调用参数断言：game/page/pageSize/table + Cookie 透传
+	// （跳过 ProbeAPI 的轻量探测请求，pageSize=1 为探测、500 为业务请求）
 	var got *testAPIRequest
 	for _, r := range srv.requests {
-		if r.method == http.MethodGet && r.path == "/api/v1/merchant/recycle/orders" {
+		if r.method == http.MethodGet && r.path == "/api/v1/merchant/recycle/orders" && len(r.query["pageSize"]) > 0 && r.query["pageSize"][0] == "500" {
 			got = &r
 			break
 		}
@@ -178,8 +179,8 @@ func TestScrapeGameTable_APIModeExpiredCookie(t *testing.T) {
 
 func TestScrapeGameTable_AutoModeAPIFailureFallsBackToBrowser(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
+		if len(r.URL.Query()["pageSize"]) > 0 && r.URL.Query()["pageSize"][0] == "1" {
+			w.WriteHeader(http.StatusOK) // ProbeAPI 探测通过
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
@@ -267,8 +268,9 @@ func TestScrapeGameTable_AutoModeProbeFailureFallsBackToBrowser(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "浏览器") {
 		t.Fatalf("probe failure should fall back to browser, got err: %v", err)
 	}
-	if !srv.hasRequest(http.MethodHead, "/api/") {
-		t.Fatal("ProbeAPI HEAD request was not sent")
+	// ProbeAPI 现在对实际订单端点发 GET（pageSize=1），而非 HEAD /api/
+	if !srv.hasRequest(http.MethodGet, "/api/v1/merchant/recycle/orders") {
+		t.Fatal("ProbeAPI GET request to orders endpoint was not sent")
 	}
 }
 
