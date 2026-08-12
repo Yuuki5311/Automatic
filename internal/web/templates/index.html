@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交易猫数据抓取 · 状态面板</title>
+<style>
+  :root { --bg: #f5f5f5; --card: #fff; --text: #333; --muted: #888; --green: #22c55e; --yellow: #eab308; --red: #ef4444; --blue: #3b82f6; --border: #e5e5e5; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 24px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 500; }
+  .badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
+  .badge.running { background: #dcfce7; color: #166534; }
+  .badge.running::before { background: var(--green); }
+  .badge.stopped { background: #f3f4f6; color: #6b7280; }
+  .badge.stopped::before { background: #9ca3af; }
+  .badge.ok { background: #dcfce7; color: #166534; }
+  .badge.fail { background: #fef2f2; color: #991b1b; }
+  .badge.warn { background: #fefce8; color: #854d0e; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--muted); }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 14px; }
+  .row .label { color: var(--muted); }
+  .mono { font-family: "SF Mono", "Cascadia Code", monospace; font-size: 13px; }
+  .remaining.ok { color: var(--green); }
+  .remaining.warn { color: var(--yellow); }
+  .remaining.critical, .remaining.expired { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .empty { text-align: center; color: var(--muted); padding: 24px 0; font-size: 14px; }
+  .phase { font-size: 13px; color: var(--blue); padding: 4px 0; }
+  .footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📊 交易猫数据抓取 · 状态面板</h1>
+  <span id="daemon-badge" class="badge {{if eq .DaemonState "running"}}running{{else}}stopped{{end}}">
+    {{if eq .DaemonState "running"}}运行中{{else}}已停止{{end}}
+  </span>
+</div>
+
+<div class="grid">
+  <!-- Cookie 卡片 -->
+  <div class="card">
+    <h2>🔑 Cookie 状态</h2>
+    {{if .Cookie.Present}}
+    <div class="row"><span class="label">令牌</span><span class="mono">{{.Cookie.MaskedValue}}</span></div>
+    <div class="row"><span class="label">状态</span>
+      {{if .Cookie.Valid}}<span class="badge ok">有效</span>{{else}}<span class="badge fail">无效</span>{{end}}
+    </div>
+    <div class="row"><span class="label">过期时间</span><span>{{.Cookie.ExpiresAt | fmtTime}}</span></div>
+    <div class="row"><span class="label">剩余</span><span class="remaining {{.Cookie.RemainingSecs | remClass}}">{{.Cookie.RemainingSecs | fmtRemaining}}</span></div>
+    <div class="row"><span class="label">更新时间</span><span>{{.Cookie.UpdatedAt | fmtTime}}</span></div>
+    {{else}}
+    <div class="empty">Cookie 未加载</div>
+    {{end}}
+  </div>
+
+  <!-- 运行信息卡片 -->
+  <div class="card">
+    <h2>📋 {{if .CurrentRun}}本轮抓取（进行中）{{else}}最近抓取{{end}}</h2>
+    {{if .CurrentRun}}
+    <div class="phase">当前阶段: {{.Phase}}</div>
+    <div class="row"><span class="label">开始</span><span>{{.CurrentRun.StartedAt | fmtTime}}</span></div>
+    {{else if .LastRun}}
+    <div class="row"><span class="label">开始</span><span>{{.LastRun.StartedAt | fmtTime}}</span></div>
+    <div class="row"><span class="label">结束</span><span>{{.LastRun.EndedAt | fmtTime}}</span></div>
+    <div class="row"><span class="label">耗时</span><span>{{.LastRun.DurationSec | fmtDur}}</span></div>
+    <div class="row"><span class="label">结果</span>
+      {{if .LastRun.Success}}<span class="badge ok">成功 · {{.LastRun.TotalOrders}} 条</span>
+      {{else}}<span class="badge fail">失败{{if .LastRun.Error}}: {{.LastRun.Error}}{{end}}</span>{{end}}
+    </div>
+    {{else}}
+    <div class="empty">暂无抓取记录</div>
+    {{end}}
+  </div>
+</div>
+
+<!-- 游戏结果表格 -->
+<div class="card">
+  <h2>🎮 各游戏结果</h2>
+  {{if .Games}}
+  <table>
+    <thead><tr><th>游戏</th><th>表格</th><th>结果</th></tr></thead>
+    <tbody>
+    {{range .Games}}
+    <tr>
+      <td>{{.GameName}}</td>
+      <td>{{if .TableKey}}{{.TableKey}}{{else}}-{{end}}</td>
+      <td>{{if .Success}}<span class="badge ok">{{.RecordCount}} 条</span>
+        {{else}}<span class="badge fail">{{.Error}}</span>{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">暂无抓取记录</div>
+  {{end}}
+</div>
+
+<div class="footer">自动刷新 · 每 5 秒 · 服务器时间: {{.ServerTime | fmtTime}}</div>
+
+<script>
+(async function refresh() {
+  try {
+    const resp = await fetch('/api/status');
+    const s = await resp.json();
+    // daemon badge
+    const db = document.getElementById('daemon-badge');
+    db.textContent = s.daemon_state === 'running' ? '运行中' : '已停止';
+    db.className = 'badge ' + (s.daemon_state === 'running' ? 'running' : 'stopped');
+    // re-render by reloading the page (simple approach that avoids complex DOM diffing)
+    if (s.phase !== '{{.Phase}}' || s.daemon_state !== '{{.DaemonState}}' ||
+        (s.last_run && s.last_run.ended_at !== '{{if .LastRun}}{{.LastRun.EndedAt.Format "2006-01-02T15:04:05Z07:00"}}{{end}}')) {
+      location.reload();
+      return;
+    }
+    // update time-sensitive fields
+    const remainEl = document.querySelector('.remaining');
+    if (remainEl && s.cookie.remaining_seconds !== undefined) {
+      const cls = s.cookie.remaining_seconds <= 0 ? 'expired' :
+                  s.cookie.remaining_seconds < 3600 ? 'critical' :
+                  s.cookie.remaining_seconds < 86400 ? 'warn' : 'ok';
+      remainEl.className = 'remaining ' + cls;
+      let label;
+      if (s.cookie.remaining_seconds <= 0) label = '已过期';
+      else {
+        const d = s.cookie.remaining_seconds;
+        if (d >= 86400) label = Math.floor(d/3600) + 'h' + Math.floor((d%3600)/60) + 'm';
+        else if (d >= 3600) label = Math.floor(d/3600) + 'h' + Math.floor((d%3600)/60) + 'm';
+        else label = Math.floor(d/60) + 'm' + (d%60) + 's';
+      }
+      remainEl.textContent = label;
+    }
+    const footerEl = document.querySelector('.footer');
+    if (footerEl) footerEl.textContent = '自动刷新 · 每 5 秒 · 服务器时间: ' + (s.server_time || '');
+  } catch(e) { /* ignore fetch errors during page unload */ }
+  setTimeout(refresh, 5000);
+})();
+</script>
+</body>
+</html>

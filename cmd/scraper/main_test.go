@@ -43,8 +43,8 @@ func TestNewCaptchaSolver(t *testing.T) {
 		{name: "opencv本地识别", cfg: &config.CaptchaConfig{Provider: "opencv", MaxRetry: 5}, wantType: "*captcha.SliderSolver"},
 		{name: "超级鹰第三方", cfg: &config.CaptchaConfig{Provider: "chaojiying", APIKey: "k"}, wantType: "*captcha.ThirdPartySolver"},
 		{name: "2captcha第三方", cfg: &config.CaptchaConfig{Provider: "2captcha", APIKey: "k"}, wantType: "*captcha.ThirdPartySolver"},
-		{name: "provider为空回退第三方", cfg: &config.CaptchaConfig{}, wantType: "*captcha.ThirdPartySolver"},
-		{name: "配置为nil回退第三方", cfg: nil, wantType: "*captcha.ThirdPartySolver"},
+		{name: "provider为空默认opencv", cfg: &config.CaptchaConfig{}, wantType: "*captcha.SliderSolver"},
+		{name: "配置为nil默认opencv", cfg: nil, wantType: "*captcha.SliderSolver"},
 	}
 
 	for _, tt := range tests {
@@ -156,7 +156,7 @@ func TestBinaryUnknownFlag(t *testing.T) {
 	if !strings.Contains(output, "flag provided but not defined") {
 		t.Fatalf("输出中未包含 flag 错误信息，输出: %s", output)
 	}
-	for _, want := range []string{"-config", "-once", "-daemon"} {
+	for _, want := range []string{"-config", "-once", "-daemon", "-web"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("用法说明中缺少 %s，输出: %s", want, output)
 		}

@@ -3,7 +3,7 @@ package feishu
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -53,7 +53,7 @@ func (b *BitableOps) BatchInsertOrders(
 	// 1. 拉取现有记录用于去重（拉取失败时退化为全部按新增处理，保证数据不丢）
 	existing, err := b.listAllRecords(ctx, tableID)
 	if err != nil {
-		log.Printf("[飞书] 获取现有记录失败: %v", err)
+		slog.Warn("获取现有记录失败", "component", "feishu", "error", err)
 	}
 
 	// orderID → recordID 映射
@@ -98,7 +98,7 @@ func (b *BitableOps) BatchInsertOrders(
 			map[string]interface{}{"records": records}, &result); err != nil {
 			return fmt.Errorf("批量写入记录失败: %w", err)
 		}
-		log.Printf("[飞书] 批量新增 %d 条记录到表格 %s", len(batch), tableID)
+		slog.Info("批量新增记录", "component", "feishu", "count", len(batch), "table", tableID)
 	}
 
 	// 4. 逐条更新已存在的记录（更新失败仅告警，不中断整体流程）
@@ -116,14 +116,14 @@ func (b *BitableOps) BatchInsertOrders(
 				Msg  string `json:"msg"`
 			}
 			if err := b.client.doRequest(ctx, http.MethodPut, path, body, &updateResult); err != nil {
-				log.Printf("[飞书] 更新记录 %s 失败: %v", order.OrderID, err)
+				slog.Warn("更新记录失败", "component", "feishu", "order_id", order.OrderID, "error", err)
 				continue
 			}
 		}
-		log.Printf("[飞书] 批量更新 %d 条记录", len(updateRecords))
+		slog.Info("批量更新记录", "component", "feishu", "count", len(updateRecords))
 	}
 
-	log.Printf("[飞书] 处理完毕: 新增 %d 条, 更新 %d 条", len(newRecords), len(updateRecords))
+	slog.Info("处理完毕", "component", "feishu", "new", len(newRecords), "updated", len(updateRecords))
 	return nil
 }
 

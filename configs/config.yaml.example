@@ -57,3 +57,14 @@ captcha:
   provider: "opencv"       # 优先使用 OpenCV 本地识别
   api_key: ""              # 备用第三方平台密钥（TODO: 如需使用则填写）
   max_retry: 3
+
+# Web 状态仪表盘（-web 参数启用）
+web:
+  addr: "127.0.0.1:8080"   # 监听地址，仅本地可访问；设为 "0.0.0.0:8080" 可远程访问
+
+# 结构化日志（log/slog）
+log:
+  level: "info"              # debug | info | warn | error
+  file: "./data/scraper.log" # 日志文件路径，留空则仅输出到控制台
+  max_size_mb: 10            # 单文件大小上限（MB），超限自动轮转
+  max_backups: 3             # 保留的轮转文件数
