@@ -163,11 +163,32 @@
       "Bash(git checkout *)",
       "Bash(sed -i 's/if err := b.BatchInsertOrders\\(/if _, _, err := b.BatchInsertOrders\\(/' internal/feishu/bitable_test.go)",
       "Bash(sed -i 's/if err := c.BatchInsertRecords\\(/if _, _, err := c.BatchInsertRecords\\(/' internal/feishu/bitable_test.go)",
-      "Bash(git commit -m 'feat: add Feishu sync status to dashboard with 4-zone layout *)"
+      "Bash(git commit -m 'feat: add Feishu sync status to dashboard with 4-zone layout *)",
+      "Bash(./bin/scraper -config ./configs/config.yaml -once)",
+      "Bash(rm -f data/cookies.json)",
+      "Bash(sed -i 's/tslog.Info/slog.Info/' internal/auth/login.go)",
+      "Bash(sed -i '182a\\\\\\\\treturn cookieData, nil' internal/auth/login.go)",
+      "Bash(sed -i '182s/^slog/\tslog/' internal/auth/login.go)",
+      "Bash(sed -i '183d' internal/auth/login.go)",
+      "Bash(timeout 200 ./bin/scraper -config ./configs/config.yaml -once)",
+      "Bash(sed -i 's/clickLogin/submitLogin/g' internal/auth/login.go)",
+      "Bash(timeout 260 ./bin/scraper -config ./configs/config.yaml -once)",
+      "Bash(wails version *)",
+      "Bash(npm --version)",
+      "Bash(go install *)",
+      "Bash(find /c/Users/林/go/pkg/mod/github.com/wailsapp/wails/v3@v3.0.0-beta.8/examples -name \"*.go\" -maxdepth 2 2>/dev/null | head -5 && cat /c/Users/林/go/pkg/mod/github.com/wailsapp/wails/v3@v3.0.0-beta.8/examples/vanilla/main.go 2>/dev/null | head -50)",
+      "Read(//c/Users/林/go/pkg/mod/github.com/wailsapp/wails/v3@v3.0.0-beta.8/examples/**)",
+      "Read(//c/Users/林/go/pkg/mod/github.com/wailsapp/wails/v3@v3.0.0-beta.8/examples/vanilla/**)",
+      "Read(//c/Users/林/go/pkg/mod/github.com/wailsapp/wails/v3@v3.0.0-beta.8/examples/binding/**)",
+      "Bash(cd c:/Automatic && mkdir -p cmd/gui/assets && mv cmd/gui/frontend/* cmd/gui/assets/ && rmdir cmd/gui/frontend)",
+      "Bash(timeout 15 ./cmd/gui/gui.exe)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(git commit -m 'feat: add Wails v3 desktop GUI app *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",
-      "C:\\Automatic\\.superpowers\\sdd"
+      "C:\\Automatic\\.superpowers\\sdd",
+      "C:\\Automatic\\cmd\\gui\\frontend"
     ]
   }
 }

@@ -1,0 +1,8 @@
+{
+  "name": "jiaoyimao-scraper",
+  "info": {
+    "productName": "交易猫数据抓取",
+    "description": "交易猫商户工作台数据抓取与飞书同步工具",
+    "version": "1.0.0"
+  }
+}

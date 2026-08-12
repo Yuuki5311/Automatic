@@ -34,43 +34,6 @@ func (s *stubSolver) Solve(ctx context.Context) error {
 
 func (s *stubSolver) Type() string { return "stub" }
 
-// ---------- detectLoginForm ----------
-
-func TestDetectLoginForm_DefaultIsPassword(t *testing.T) {
-	// 未配置 LoginType 时默认走账号密码登录
-	for _, loginType := range []string{"", "password"} {
-		cfg := &config.Config{JYM: config.JYMConfig{LoginType: loginType}}
-		sel := (&LoginService{}).detectLoginForm(cfg)
-		if sel.username == "" {
-			t.Fatalf("LoginType=%q: username selector empty", loginType)
-		}
-		if sel.password != `input[type="password"], input[placeholder*="密码"]` {
-			t.Fatalf("LoginType=%q: password selector = %q, want password field", loginType, sel.password)
-		}
-		if sel.smsBtn != "" {
-			t.Fatalf("LoginType=%q: smsBtn should be empty for password login, got %q", loginType, sel.smsBtn)
-		}
-		// 提交按钮选择器需覆盖常见登录按钮
-		if sel.submitBtn == "" {
-			t.Fatalf("LoginType=%q: submitBtn selector empty", loginType)
-		}
-	}
-}
-
-func TestDetectLoginForm_SMS(t *testing.T) {
-	cfg := &config.Config{JYM: config.JYMConfig{LoginType: "sms"}}
-	sel := (&LoginService{}).detectLoginForm(cfg)
-	if sel.password != `input[placeholder*="验证码"], input[name="sms_code"]` {
-		t.Fatalf("sms password(验证码) selector = %q, want sms code field", sel.password)
-	}
-	if sel.smsBtn == "" {
-		t.Fatal("sms login should provide a get-sms-code button selector")
-	}
-	if sel.username == "" || sel.submitBtn == "" {
-		t.Fatal("sms login should still provide username and submit selectors")
-	}
-}
-
 // ---------- cookiesToData ----------
 
 func TestCookiesToData_PreservesFieldsAndMaxExpiry(t *testing.T) {

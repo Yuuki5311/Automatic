@@ -17,7 +17,8 @@ type Config struct {
 }
 
 type JYMConfig struct {
-	BaseURL    string `yaml:"base_url"` // https://merchant.jiaoyimao.com
+	BaseURL    string `yaml:"base_url"`     // https://merchant.jiaoyimao.com
+	LoginURL   string `yaml:"login_url"`    // 登录页完整URL（为空时用 base_url + "/login"）
 	Username   string `yaml:"username"`
 	Password   string `yaml:"password"`
 	CookiePath string `yaml:"cookie_path"` // Cookie 持久化路径

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交易猫数据抓取</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 头部 -->
+<div class="header">
+  <h1>📊 交易猫数据抓取</h1>
+  <span id="badge-daemon" class="badge off">已停止</span>
+</div>
+
+<!-- 区域1: Cookie 状态 -->
+<div class="section">
+  <h2><span class="icon">🔑</span> Cookie 状态</h2>
+  <div id="cookie-area" class="cookie-grid">
+    <div class="empty">加载中...</div>
+  </div>
+</div>
+
+<!-- 区域2: 最近抓取 -->
+<div class="section">
+  <h2><span class="icon">📋</span> 最近抓取</h2>
+  <div id="run-area" class="run-grid">
+    <div class="empty">暂无抓取记录</div>
+  </div>
+</div>
+
+<!-- 区域3: 各游戏数据 -->
+<div class="section">
+  <h2><span class="icon">🎮</span> 各游戏数据 · 抓取与飞书写入结果</h2>
+  <div id="games-area">
+    <div class="empty">暂无抓取记录</div>
+  </div>
+</div>
+
+<!-- 区域4: Cookie 获取 -->
+<div class="section">
+  <h2><span class="icon">🔧</span> Cookie 获取</h2>
+  <div class="inline">
+    <div class="flex-1">
+      <div class="hint"><strong>自动获取</strong> — 使用配置文件中的账号密码自动登录</div>
+      <div id="login-status"></div>
+      <button class="btn btn-primary" id="btn-login" onclick="triggerLogin()">获取 Cookie（自动登录）</button>
+    </div>
+    <div class="flex-1">
+      <div class="hint"><strong>手动导入</strong> — 粘贴 EditThisCookie 格式 JSON</div>
+      <textarea id="cookie-json" placeholder='[{"name":"token","value":"...","domain":".jiaoyimao.com",...}]'></textarea>
+      <div id="import-msg"></div>
+      <button class="btn btn-primary" onclick="importCookies()" style="margin-top:6px">导入 Cookie</button>
+    </div>
+  </div>
+</div>
+
+<!-- 区域5: 操作 -->
+<div class="section">
+  <h2><span class="icon">⚡</span> 操作</h2>
+  <button class="btn btn-primary" id="btn-scrape" onclick="runScrape()">🔄 立即抓取</button>
+  <span id="scrape-msg" style="margin-left:12px;font-size:13px;color:var(--muted)"></span>
+</div>
+
+<div class="footer">自动刷新 · 每 5 秒 · <span id="server-time"></span></div>
+
+<script src="main.js"></script>
+</body>
+</html>
