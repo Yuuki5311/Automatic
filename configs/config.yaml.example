@@ -1,0 +1,59 @@
+# 交易猫回收订单抓取配置模板
+# 复制本文件为 configs/config.yaml 并填写真实值：
+#   cp configs/config.yaml.example configs/config.yaml
+# config.yaml 包含敏感信息，已被 .gitignore 忽略；请勿提交真实凭据。
+
+jiaoyimao:
+  base_url: "https://merchant.jiaoyimao.com"
+  username: "YOUR_PHONE_OR_EMAIL"   # TODO: 替换为交易猫账号
+  password: "YOUR_PASSWORD"         # TODO: 替换为交易猫密码
+  cookie_path: "./data/cookies.json"
+  login_type: "password"            # "password" 密码登录 | "sms" 短信验证码登录
+
+feishu:
+  app_id: "cli_xxxxxxxxxxxx"        # TODO: 替换为飞书应用 App ID
+  app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxx"  # TODO: 替换为飞书应用 App Secret
+  bitable_id: "tblXXXXXXXXXXXXXXXX" # TODO: 替换为多维表格 ID
+  table_mapping:
+    "火影忍者": "tblXXXXXXX1"
+    "原神_table1": "tblXXXXXXX2"        # 原神-官服
+    "原神_table2": "tblXXXXXXX3"        # 原神-渠道服/B服
+    "绝区零": "tblXXXXXXX4"
+    "崩坏：星穹铁道_table1": "tblXXXXXXX5"  # 星铁-官服
+    "崩坏：星穹铁道_table2": "tblXXXXXXX6"  # 星铁-渠道服
+    "鸣潮": "tblXXXXXXX7"
+    "三角洲行动": "tblXXXXXXX8"
+
+browser:
+  headless: true           # 无头模式，不显示浏览器窗口
+  chrome_path: ""          # 留空则自动查找系统 Chrome
+  timeout_sec: 60
+  debug_port: 9222
+
+scraper:
+  mode: "auto"             # auto: API优先，失败时用浏览器兜底
+  cron_expr: "0 */2 * * *" # 每2小时执行一次
+  games:
+    - name: "火影忍者"
+      url: "/workbench/recycle/naruto"
+      table_count: 1
+    - name: "原神"
+      url: "/workbench/recycle/genshin"
+      table_count: 2
+    - name: "绝区零"
+      url: "/workbench/recycle/zzz"
+      table_count: 1
+    - name: "崩坏：星穹铁道"
+      url: "/workbench/recycle/hsr"
+      table_count: 2
+    - name: "鸣潮"
+      url: "/workbench/recycle/wuthering"
+      table_count: 1
+    - name: "三角洲行动"
+      url: "/workbench/recycle/deltaforce"
+      table_count: 1
+
+captcha:
+  provider: "opencv"       # 优先使用 OpenCV 本地识别
+  api_key: ""              # 备用第三方平台密钥（TODO: 如需使用则填写）
+  max_retry: 3
