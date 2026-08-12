@@ -101,7 +101,9 @@ func main() {
 
 	if *daemon {
 		// 守护进程模式：使用cron定时调度
-		c := cron.New(cron.WithSeconds())
+		// 使用标准5字段表达式（与 configs/config.yaml.example 中 cron_expr 一致），
+		// 并通过 SkipIfStillRunning 防止上一轮抓取尚未结束时触发重叠运行。
+		c := cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)))
 		if _, err := c.AddFunc(cfg.Scraper.CronExpr, runScrape); err != nil {
 			log.Fatalf("无效的定时表达式 %q: %v", cfg.Scraper.CronExpr, err)
 		}
