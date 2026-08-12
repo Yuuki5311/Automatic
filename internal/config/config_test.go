@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -178,5 +180,50 @@ func TestLoadInvalidYAML(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("Load() with invalid YAML: expected error, got nil")
+	}
+}
+
+// TestLoadTestConfigFile 集成校验：仓库内 configs/config.test.yaml 必须能正常加载，
+// 且只含测试占位值（tblTEST* 表格ID、无真实凭据），确保试运行不会影响生产数据。
+func TestLoadTestConfigFile(t *testing.T) {
+	// 测试工作目录是包目录，向上两级找到仓库根目录
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	path := filepath.Join(repoRoot, "configs", "config.test.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("configs/config.test.yaml 不存在，跳过: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", path, err)
+	}
+
+	// 关键字段应被正确解析
+	if cfg.JYM.CookiePath != "./data/cookies.test.json" {
+		t.Errorf("JYM.CookiePath = %q, want ./data/cookies.test.json（独立于生产Cookie）", cfg.JYM.CookiePath)
+	}
+	if cfg.Scraper.Mode != "auto" {
+		t.Errorf("Scraper.Mode = %q, want auto", cfg.Scraper.Mode)
+	}
+	if len(cfg.Scraper.Games) != 6 {
+		t.Errorf("Scraper.Games length = %d, want 6", len(cfg.Scraper.Games))
+	}
+
+	// 安全校验：表格ID必须全部是 tblTEST* 前缀，杜绝误连生产表格
+	for game, tableID := range cfg.Feishu.TableMapping {
+		if !strings.HasPrefix(tableID, "tblTEST") {
+			t.Errorf("游戏 %s 的表格ID %q 不是测试表格（缺少 tblTEST 前缀）", game, tableID)
+		}
+	}
+	if !strings.HasPrefix(cfg.Feishu.BitableID, "bascnTEST") {
+		t.Errorf("BitableID = %q, want bascnTEST 前缀", cfg.Feishu.BitableID)
+	}
+
+	// 安全校验：不得包含真实凭据占位格式（cli_/tblXXX 等生产模板标记）
+	for _, secret := range []string{cfg.Feishu.AppSecret, cfg.JYM.Password} {
+		if secret == "" || secret == "YOUR_PASSWORD" || secret == "xxx" {
+			t.Errorf("配置中疑似包含生产占位凭据: %q", secret)
+		}
 	}
 }

@@ -1,0 +1,59 @@
+# 测试配置（集成测试与试运行专用）
+# 所有值均为占位符，不包含任何真实凭据；飞书表格 ID 使用 tblTEST* 前缀，
+# 即使误执行也只会写入测试表格，不会影响生产数据。
+# 运行方式: ./bin/scraper -config ./configs/config.test.yaml -once
+
+jiaoyimao:
+  base_url: "https://merchant.jiaoyimao.com"
+  username: "test_user"                 # 测试占位账号，无真实登录能力
+  password: "test_password"             # 测试占位密码
+  cookie_path: "./data/cookies.test.json" # 独立的测试 Cookie 文件，不覆盖生产 Cookie
+  login_type: "password"
+
+feishu:
+  app_id: "cli_test_app_id"
+  app_secret: "test_app_secret"
+  bitable_id: "bascnTEST0000000000000000"
+  table_mapping:
+    "火影忍者": "tblTEST0001"
+    "原神_table1": "tblTEST0002"        # 原神-官服（测试表）
+    "原神_table2": "tblTEST0003"        # 原神-渠道服/B服（测试表）
+    "绝区零": "tblTEST0004"
+    "崩坏：星穹铁道_table1": "tblTEST0005"  # 星铁-官服（测试表）
+    "崩坏：星穹铁道_table2": "tblTEST0006"  # 星铁-渠道服（测试表）
+    "鸣潮": "tblTEST0007"
+    "三角洲行动": "tblTEST0008"
+
+browser:
+  headless: true           # 无头模式，不显示浏览器窗口、不抢占鼠标
+  chrome_path: ""          # 留空则自动查找系统 Chrome
+  timeout_sec: 30          # 测试环境使用更短的超时，便于快速失败
+  debug_port: 9222
+
+scraper:
+  mode: "auto"             # auto: API优先，失败时用浏览器兜底
+  cron_expr: "0 */2 * * *"
+  games:
+    - name: "火影忍者"
+      url: "/workbench/recycle/naruto"
+      table_count: 1
+    - name: "原神"
+      url: "/workbench/recycle/genshin"
+      table_count: 2
+    - name: "绝区零"
+      url: "/workbench/recycle/zzz"
+      table_count: 1
+    - name: "崩坏：星穹铁道"
+      url: "/workbench/recycle/hsr"
+      table_count: 2
+    - name: "鸣潮"
+      url: "/workbench/recycle/wuthering"
+      table_count: 1
+    - name: "三角洲行动"
+      url: "/workbench/recycle/deltaforce"
+      table_count: 1
+
+captcha:
+  provider: "opencv"       # 与生产一致：优先 OpenCV 本地识别
+  api_key: ""
+  max_retry: 1             # 测试环境减少重试，快速失败

@@ -188,6 +188,42 @@ func TestParseTableHTML_ElTable(t *testing.T) {
 	}
 }
 
+// TestParseTableHTML_SixColumns 兼容无"操作"列的六列表格布局
+// （订单编号 | 账号信息 | 区服 | 价格 | 状态 | 时间）。
+func TestParseTableHTML_SixColumns(t *testing.T) {
+	html := `
+	<table>
+		<thead><tr><th>订单编号</th><th>账号信息</th><th>区服</th><th>价格</th><th>状态</th><th>时间</th></tr></thead>
+		<tbody>
+			<tr><td>ORD001</td><td>账号A</td><td>官服</td><td>¥100.00</td><td>已完成</td><td>2026-08-10 12:00:00</td></tr>
+			<tr><td>ORD002</td><td>账号B</td><td>渠道服</td><td>￥200.50</td><td>处理中</td><td>2026-08-10 13:00:00</td></tr>
+		</tbody>
+	</table>`
+
+	orders := parseTableHTML(html, "测试游戏")
+	if len(orders) != 2 {
+		t.Fatalf("期望2条记录，实际: %d", len(orders))
+	}
+	if orders[0].OrderID != "ORD001" {
+		t.Errorf("期望订单号 ORD001，实际: %s", orders[0].OrderID)
+	}
+	if orders[0].Price != 100.00 {
+		t.Errorf("期望价格 100.00，实际: %v", orders[0].Price)
+	}
+	if orders[1].ServerRegion != "渠道服" {
+		t.Errorf("期望区服'渠道服'，实际: %s", orders[1].ServerRegion)
+	}
+	if orders[1].Price != 200.50 {
+		t.Errorf("期望价格 200.50，实际: %v", orders[1].Price)
+	}
+	if orders[0].GameName != "测试游戏" {
+		t.Errorf("期望游戏名'测试游戏'，实际: %s", orders[0].GameName)
+	}
+	if orders[0].CreateTime.IsZero() {
+		t.Error("期望创建时间被解析，实际为零值")
+	}
+}
+
 func TestParseTableHTML_EmptyAndInvalid(t *testing.T) {
 	if orders := parseTableHTML("", "原神"); orders != nil && len(orders) != 0 {
 		t.Fatalf("empty HTML should produce no orders, got %d", len(orders))
