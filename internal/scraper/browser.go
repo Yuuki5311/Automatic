@@ -26,6 +26,11 @@ func newBrowserScraper(cfg *config.Config, mgr *browser.Manager, cookies []model
 	return &browserScraper{cfg: cfg, browserMgr: mgr, cookies: cookies}
 }
 
+// setCookies 更新浏览器爬虫持有的Cookie（重新登录后由 Manager 调用）。
+func (b *browserScraper) setCookies(cookies []models.CookieEntry) {
+	b.cookies = cookies
+}
+
 // ScrapeRecyclePage 通过浏览器模拟点击导航到回收页面并提取表格数据。
 //
 // 注意：
@@ -56,21 +61,34 @@ func (b *browserScraper) ScrapeRecyclePage(
 
 	workbenchURL := b.cfg.JYM.BaseURL + "/workbench"
 
-	actions := []chromedp.Action{
-		// 0. 注入登录Cookie（先于导航，确保会话有效）
+	// 1. 注入登录Cookie（先于导航，确保会话有效）并导航到工作台。
+	// 导航后检查是否被重定向到登录页（Cookie失效的典型表现）：
+	// 命中登录墙时返回 errLoginWall，由 Manager 触发重新登录后重试。
+	if err := chromedp.Run(bctx,
 		browser.SetCookies(b.cookies),
-		// 1. 导航到工作台
 		browser.Navigate(workbenchURL),
 		browser.WaitReady(),
-		browser.Sleep(2 * time.Second),
+		browser.Sleep(2*time.Second),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			var pageURL string
+			if err := chromedp.Location(&pageURL).Do(ctx); err != nil {
+				return err
+			}
+			if strings.Contains(pageURL, "/login") {
+				return fmt.Errorf("%w (当前URL: %s)", errLoginWall, pageURL)
+			}
+			return nil
+		}),
+	); err != nil {
+		return nil, fmt.Errorf("导航到工作台失败: %w", err)
 	}
 
 	// 2. 点击左侧导航"我的交易猫"
-	actions = append(actions,
+	actions := []chromedp.Action{
 		browser.WaitVisible(`.sidebar, .nav-left, [class*="sidebar"]`, chromedp.ByQuery),
 		browser.Click(`[class*="我的交易猫"]`),
-		browser.Sleep(1*time.Second),
-	)
+		browser.Sleep(1 * time.Second),
+	}
 
 	// 3. 点击"我的回收"
 	actions = append(actions,

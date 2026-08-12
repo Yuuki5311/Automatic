@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/feishu"
+	"github.com/example/jiaoyimao-scraper/internal/models"
 	"github.com/example/jiaoyimao-scraper/internal/scraper"
 )
 
@@ -68,6 +70,10 @@ func main() {
 
 		// 3. 抓取所有游戏数据
 		scraperMgr := scraper.NewManager(cfg, browserMgr, cookies)
+		// 抓取途中会话失效（API 401/403、页面跳转登录页）时自动重新登录后重试
+		scraperMgr.SetSessionRefresher(func(refreshCtx context.Context) (*models.CookieData, error) {
+			return loginSvc.RefreshIfNeeded(refreshCtx, cfg, captchaSolver)
+		})
 		allOrders, err := scraperMgr.ScrapeAll(ctx)
 		if err != nil {
 			log.Printf("抓取数据失败: %v", err)

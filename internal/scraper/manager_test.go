@@ -274,6 +274,73 @@ func TestScrapeGameTable_AutoModeProbeFailureFallsBackToBrowser(t *testing.T) {
 	}
 }
 
+// TestScrapeGameTable_AutoModeAuthErrorRefreshesAndRetries 验证会话失效（401）时：
+// 先重新登录刷新Cookie → 用新Cookie重试API一次 → 成功后不再落入浏览器兜底。
+func TestScrapeGameTable_AutoModeAuthErrorRefreshesAndRetries(t *testing.T) {
+	var fetchCalls int
+	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.URL.Query()["pageSize"]) > 0 && r.URL.Query()["pageSize"][0] == "1" {
+			w.WriteHeader(http.StatusOK) // ProbeAPI 探测通过
+			return
+		}
+		fetchCalls++
+		if fetchCalls == 1 {
+			w.WriteHeader(http.StatusUnauthorized) // 首次业务请求Cookie过期
+			return
+		}
+		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON("原神")})
+	})
+	defer srv.Close()
+
+	cfg := &config.Config{
+		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
+		Scraper: config.ScraperConfig{Mode: "auto"},
+	}
+	// browserMgr 为 nil：若刷新后API仍失败，浏览器兜底会返回明确错误
+	m := newTestManager(cfg, &models.CookieData{})
+
+	refreshes := 0
+	m.SetSessionRefresher(func(ctx context.Context) (*models.CookieData, error) {
+		refreshes++
+		return &models.CookieData{Cookies: []models.CookieEntry{
+			{Name: "token", Value: "fresh", Domain: ".jiaoyimao.com", Path: "/"},
+		}}, nil
+	})
+
+	orders, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
+	if err != nil {
+		t.Fatalf("auto mode should refresh and retry successfully: %v", err)
+	}
+	if refreshes != 1 {
+		t.Fatalf("expected exactly 1 refresh, got %d", refreshes)
+	}
+	if len(orders) != 1 || orders[0].OrderID != "NO-原神" {
+		t.Fatalf("unexpected orders: %+v", orders)
+	}
+	// 重试请求应携带刷新后的Cookie（requests 按时间序追加，取最后一个业务请求）
+	var got *testAPIRequest
+	for i := len(srv.requests) - 1; i >= 0; i-- {
+		r := srv.requests[i]
+		if r.method == http.MethodGet && r.path == "/api/v1/merchant/recycle/orders" &&
+			len(r.query["pageSize"]) > 0 && r.query["pageSize"][0] == "500" {
+			got = &r
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("retried API request was never sent")
+	}
+	freshFound := false
+	for _, c := range got.cookies {
+		if c.Name == "token" && c.Value == "fresh" {
+			freshFound = true
+		}
+	}
+	if !freshFound {
+		t.Error("retried API request should carry the refreshed cookie")
+	}
+}
+
 func TestScrapeGameTable_BrowserOnlyMode(t *testing.T) {
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: "http://example.invalid"},
