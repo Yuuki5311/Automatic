@@ -173,64 +173,102 @@ func (s *SliderSolver) calculateGapDistance(bgImageBytes []byte) (int, error) {
 	return gapLeft, nil
 }
 
-// simulateDrag 模拟人类拖拽滑块的行为。
+// simulateDrag 模拟人类缓慢拖拽滑块，在指定区域内从左向右滑动。
 //
-// 拖拽过程：移动到滑块中心 → 按下左键 → 沿人类轨迹逐步移动（带 Y 轴抖动
-// 与不均匀节奏）→ 在终点释放。全程通过 CDP 协议派发鼠标事件，在 headless
-// 模式下执行，不抢占用户物理鼠标。
+// 流程：定位滑块按钮和轨道区域 → 移动到滑块中心 → 短暂停顿（模拟人类观察）
+// → 按下左键 → 沿人类轨迹逐步缓慢移动（每步 20-80ms，总耗时约 3-5 秒，
+// 带 Y 轴微抖和不均匀节奏）→ 在终点释放。全程通过 CDP 协议派发鼠标事件，
+// 在 headless 模式下执行，不抢占用户物理鼠标。
 func (s *SliderSolver) simulateDrag(ctx context.Context, selector string, distance int) error {
 	if distance <= 0 {
 		return fmt.Errorf("拖拽距离无效: %d", distance)
 	}
 
-	// 获取滑块元素位置（通过 strconv.Quote 转义选择器，避免注入非法 JS 语法）
+	// 1. 同时获取滑块按钮和轨道区域的位置
 	var rect struct {
-		X, Y, Width, Height float64
+		BtnX, BtnY, BtnW, BtnH       float64
+		TrackX, TrackY, TrackW, TrackH float64
 	}
 	expr := fmt.Sprintf(`(() => {
-		const el = document.querySelector(%s);
-		if (!el) return null;
-		const r = el.getBoundingClientRect();
-		return {x: r.x, y: r.y, width: r.width, height: r.height};
+		const btn = document.querySelector(%s);
+		if (!btn) return null;
+		const br = btn.getBoundingClientRect();
+		// 尝试找到滑块所在的轨道容器（常见选择器）
+		const track = btn.closest('.slider-track, .slide-track, .nc_wrapper, ' +
+			'.slider-container, .slide-verify, [class*="slider"], [class*="track"]');
+		const tr = track ? track.getBoundingClientRect() : br;
+		return {
+			btnX: br.x, btnY: br.y, btnW: br.width, btnH: br.height,
+			trackX: tr.x, trackY: tr.y, trackW: tr.width, trackH: tr.height
+		};
 	})()`, strconv.Quote(selector))
-	// 注意：CDP executor 只在 chromedp.Run 内部附加到 context，
-	// 鼠标事件与Evaluate必须经 chromedp.Run 执行，否则返回 ErrInvalidContext。
 	if err := chromedp.Run(ctx, chromedp.Evaluate(expr, &rect)); err != nil {
-		return fmt.Errorf("获取滑块位置失败: %w", err)
+		return fmt.Errorf("获取滑块与轨道位置失败: %w", err)
 	}
-	if rect.Width <= 0 || rect.Height <= 0 {
+	if rect.BtnW <= 0 || rect.BtnH <= 0 {
 		return fmt.Errorf("滑块元素位置无效: %+v", rect)
 	}
 
-	startX := rect.X + rect.Width/2
-	startY := rect.Y + rect.Height/2
+	// 起点：滑块按钮中心（即轨道左端）
+	startX := rect.BtnX + rect.BtnW/2
+	startY := rect.BtnY + rect.BtnH/2
+	// 轨道的垂直中心（拖拽过程中 Y 轴在此附近轻微抖动）
+	trackMidY := rect.TrackY + rect.TrackH/2
+	// 如果没有获取到独立轨道，用滑块 Y 作为 fallback
+	if rect.TrackH <= 0 {
+		trackMidY = startY
+	}
 
-	// 生成人类拖拽轨迹
+	// 2. 鼠标先移动到滑块中心，短暂停顿模拟人类观察验证码
+	if err := chromedp.Run(ctx,
+		chromedp.MouseEvent(input.MouseMoved, startX, startY),
+	); err != nil {
+		return err
+	}
+	// 人类观察停顿：200-400ms
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// 3. 按下鼠标左键
+	if err := chromedp.Run(ctx,
+		chromedp.MouseEvent(input.MousePressed, startX, startY, chromedp.ButtonLeft),
+	); err != nil {
+		return err
+	}
+
+	// 4. 生成缓慢的人类拖拽轨迹（总耗时约 3-5 秒）
 	trajectory := generateHumanTrajectory(distance)
 
-	// 1. 鼠标移动到滑块中心
-	if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MouseMoved, startX, startY)); err != nil {
-		return err
-	}
-	// 2. 按下鼠标左键
-	if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MousePressed, startX, startY, chromedp.ButtonLeft)); err != nil {
-		return err
-	}
-	// 3. 按轨迹逐步拖动（鼠标移动事件携带左键按下状态，模拟真实拖拽）
+	// 5. 沿轨迹逐步缓慢移动，Y 轴在轨道中心附近轻微抖动
 	for i, offset := range trajectory[1:] {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// 轻微 Y 轴抖动模拟人类手部不稳定
-		y := startY + float64(i%3-1)*0.5
-		if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MouseMoved, startX+offset, y, dragButtons)); err != nil {
+		curX := startX + offset
+		// Y 轴在轨道中心附近 ±1px 内轻微抖动
+		curY := trackMidY + float64(i%3-1)*0.5
+		if err := chromedp.Run(ctx,
+			chromedp.MouseEvent(input.MouseMoved, curX, curY, dragButtons),
+		); err != nil {
 			return err
 		}
+		// 缓慢步进：20-80ms 每步，总拖拽约 3-5 秒
 		time.Sleep(dragDelay(i))
 	}
-	// 4. 在终点释放鼠标
+
+	// 6. 在终点稍作停顿（模拟人类松手前的确认），然后释放鼠标
 	finalX := startX + float64(distance)
-	if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MouseReleased, finalX, startY, chromedp.ButtonLeft)); err != nil {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := chromedp.Run(ctx,
+		chromedp.MouseEvent(input.MouseReleased, finalX, trackMidY, chromedp.ButtonLeft),
+	); err != nil {
 		return err
 	}
 
@@ -247,56 +285,74 @@ func dragButtons(p *input.DispatchMouseEventParams) *input.DispatchMouseEventPar
 //
 // 轨迹特征：先加速 → 匀速 → 减速 → 轻微过冲 → 回退修正到精确落点。
 // 函数为确定性纯函数（无随机性），便于测试。
+// 总步数控制在 30-90 步，配合 dragDelay 的 20-80ms 步进，总拖拽时长约 3-5 秒。
 func generateHumanTrajectory(totalDistance int) []float64 {
 	if totalDistance <= 0 {
 		return []float64{0}
 	}
 	d := float64(totalDistance)
-	steps := 50 + totalDistance/5 // 约每 5px 一个采样点
-	if steps < 40 {
-		steps = 40
+
+	// 每 3-4px 一个采样点，总步数 30-90，保证轨迹平滑但不冗余
+	steps := 30 + totalDistance/4
+	if steps < 25 {
+		steps = 25
 	}
+	if steps > 90 {
+		steps = 90
+	}
+
 	overshoot := 2.0
 	if d < 30 {
 		overshoot = 1.0
 	}
-	peak := d + overshoot // 过冲位置
+	peak := d + overshoot
 
 	trajectory := make([]float64, steps)
 	trajectory[0] = 0
 
 	// 阶段1：sigmoid 缓动曲线，从 0 平滑升到 peak。
-	// 起点附近加速（坡度渐增）、中段近似匀速（坡度最大且平缓）、末端减速（坡度趋缓）。
 	sig := func(t float64) float64 { return 1 / (1 + math.Exp(-10*(t-0.5))) }
-	norm := sig(1.0) // 归一化因子，保证 t=1 时到达 peak
+	norm := sig(1.0)
 	for i := 1; i < steps; i++ {
 		t := float64(i) / float64(steps-1)
 		trajectory[i] = peak * sig(t) / norm
 	}
 
-	// 阶段2：末尾 retreatSteps 个采样点从 peak 回退到目标距离 d，
-	// 采用 ease-out（先快后慢）模拟人类过冲后的落点修正。
-	retreatSteps := steps/25 + 1
-	if retreatSteps > 5 {
-		retreatSteps = 5
+	// 阶段2：末尾 retreatSteps 个采样点从 peak 回退到目标距离 d。
+	retreatSteps := steps/20 + 1
+	if retreatSteps > 4 {
+		retreatSteps = 4
 	}
 	for i := 0; i < retreatSteps; i++ {
 		idx := steps - 1 - i
 		p := float64(i) / float64(retreatSteps-1)
 		trajectory[idx] = d + (peak-d)*(1-(1-p)*(1-p))
 	}
-	// 精确落点
 	trajectory[steps-1] = d
 
 	return trajectory
 }
 
-// dragDelay 返回第 i 步移动的间隔时长（毫秒），模拟人类不匀速的拖拽节奏。
-// 确定性函数，便于测试；拖拽时约每 7 步有一次轻微停顿（人类迟疑）。
+// dragDelay 返回第 i 步移动的间隔时长（毫秒），模拟人类缓慢、不匀速的拖拽节奏。
+//
+// 每步 20-80ms（平均约 40ms），每隔约 7 步有一次额外迟疑（+30-50ms），
+// 总拖拽耗时约 3-5 秒，符合真实人类缓慢滑动滑块的习惯。
 func dragDelay(i int) time.Duration {
-	ms := 8 + int(math.Sin(float64(i)*0.3)*3) // 5~11ms
-	if i%7 == 0 {
-		ms += 4 // 偶尔停顿
+	// 基础步进 20-45ms，随正弦波动模拟手部不均匀移动
+	ms := 25 + int(math.Sin(float64(i)*0.4)*15) // 10-40ms
+	// 加入缓慢趋势：中段稍快（模拟人类加速段），首尾稍慢
+	if i < 5 || i > 80 {
+		ms += 25 // 起步和接近终点时更慢（人类犹豫/对准）
+	}
+	// 偶尔的迟疑停顿
+	if i%7 == 4 {
+		ms += 35
+	}
+	if ms < 15 {
+		ms = 15
+	}
+	if ms > 80 {
+		ms = 80
 	}
 	return time.Duration(ms) * time.Millisecond
 }

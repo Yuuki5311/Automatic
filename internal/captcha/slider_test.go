@@ -19,8 +19,15 @@ func TestGenerateHumanTrajectory(t *testing.T) {
 	for _, d := range cases {
 		tr := generateHumanTrajectory(d)
 
-		// 采样点数量符合约定
-		if want := 50 + d/5; len(tr) != want {
+		// 采样点数量：30 + d/4，上限 90，下限 25
+		want := 30 + d/4
+		if want > 90 {
+			want = 90
+		}
+		if want < 25 {
+			want = 25
+		}
+		if len(tr) != want {
 			t.Errorf("distance=%d: 轨迹采样点数量 = %d, want %d", d, len(tr), want)
 		}
 		// 起点为 0（起始位置）
@@ -116,8 +123,8 @@ func TestGenerateHumanTrajectoryInvalidDistance(t *testing.T) {
 func TestDragDelay(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		dd := dragDelay(i)
-		if dd <= 0 || dd > 20*time.Millisecond {
-			t.Errorf("dragDelay(%d) = %v 超出合理范围 (0, 20ms]", i, dd)
+		if dd < 12*time.Millisecond || dd > 85*time.Millisecond {
+			t.Errorf("dragDelay(%d) = %v 超出合理范围 [12ms, 85ms]", i, dd)
 		}
 	}
 	if dragDelay(3) != dragDelay(3) {
