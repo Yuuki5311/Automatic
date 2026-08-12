@@ -221,13 +221,19 @@ func pollForCaptcha(
 func (s *LoginService) extractCookies(ctx context.Context) (*models.CookieData, error) {
 	// 获取当前页面的URL作为cookie domain
 	var currentURL string
-	if err := chromedp.Evaluate(`window.location.href`, &currentURL).Do(ctx); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`window.location.href`, &currentURL)); err != nil {
 		return nil, fmt.Errorf("获取当前URL失败: %w", err)
 	}
 
-	// 通过CDP协议获取所有Cookie（包括HTTPOnly的）
-	cdpCookies, err := network.GetCookies().WithURLs([]string{currentURL}).Do(ctx)
-	if err != nil {
+	// 通过CDP协议获取所有Cookie（包括HTTPOnly的）。
+	// 注意：CDP executor 只在 chromedp.Run 内部附加到 context，必须用 ActionFunc 包裹，
+	// 否则直接调用 network.GetCookies().Do(ctx) 会返回 ErrInvalidContext。
+	var cdpCookies []*network.Cookie
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		cdpCookies, err = network.GetCookies().WithURLs([]string{currentURL}).Do(ctx)
+		return err
+	})); err != nil {
 		return nil, fmt.Errorf("CDP获取Cookie失败: %w", err)
 	}
 
