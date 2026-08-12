@@ -5,145 +5,149 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>交易猫数据抓取 · 状态面板</title>
 <style>
-  :root { --bg: #f5f5f5; --card: #fff; --text: #333; --muted: #888; --green: #22c55e; --yellow: #eab308; --red: #ef4444; --blue: #3b82f6; --border: #e5e5e5; }
+  :root { --bg: #f5f5f5; --card: #fff; --text: #333; --muted: #888; --green: #22c55e; --yellow: #eab308; --red: #ef4444; --blue: #3b82f6; --border: #e0e0e0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 24px; }
-  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-  .header h1 { font-size: 20px; font-weight: 600; }
-  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 500; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 20px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .header h1 { font-size: 20px; font-weight: 700; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px; border-radius: 14px; font-size: 13px; font-weight: 600; }
   .badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
-  .badge.running { background: #dcfce7; color: #166534; }
-  .badge.running::before { background: var(--green); }
-  .badge.stopped { background: #f3f4f6; color: #6b7280; }
-  .badge.stopped::before { background: #9ca3af; }
+  .badge.on { background: #dcfce7; color: #166534; } .badge.on::before { background: var(--green); }
+  .badge.off { background: #f3f4f6; color: #6b7280; } .badge.off::before { background: #bbb; }
   .badge.ok { background: #dcfce7; color: #166534; }
-  .badge.fail { background: #fef2f2; color: #991b1b; }
+  .badge.err { background: #fef2f2; color: #991b1b; }
   .badge.warn { background: #fefce8; color: #854d0e; }
   .badge.info { background: #eff6ff; color: #1e40af; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--muted); }
-  .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 14px; }
-  .row .label { color: var(--muted); }
-  .mono { font-family: "SF Mono", "Cascadia Code", monospace; font-size: 13px; }
-  .remaining.ok { color: var(--green); }
-  .remaining.warn { color: var(--yellow); }
-  .remaining.critical, .remaining.expired { color: var(--red); }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; font-size: 13px; }
-  .empty { text-align: center; color: var(--muted); padding: 24px 0; font-size: 14px; }
-  .phase { font-size: 13px; color: var(--blue); padding: 4px 0; }
-  .footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 20px; }
 
-  /* form elements */
-  .btn { padding: 8px 18px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; }
+  /* 区域卡片 */
+  .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+  .section h2 { font-size: 15px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .section h2 .icon { font-size: 18px; }
+
+  /* Cookie 区域 */
+  .cookie-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .cookie-grid { grid-template-columns: 1fr; } }
+  .kv { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
+  .kv .l { color: var(--muted); }
+  .mono { font-family: "SF Mono","Cascadia Code",monospace; font-size: 13px; }
+  .ttl.ok { color: var(--green); font-weight: 600; }
+  .ttl.warn { color: var(--yellow); font-weight: 600; }
+  .ttl.bad { color: var(--red); font-weight: 600; }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; background: #fafafa; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .cell-ok { color: var(--green); }
+  .cell-err { color: var(--red); }
+  .empty { text-align: center; color: var(--muted); padding: 20px; font-size: 14px; }
+
+  /* 按钮 & 输入 */
+  .btn { padding: 9px 20px; border: none; border-radius: 7px; font-size: 14px; cursor: pointer; font-weight: 500; }
   .btn-primary { background: var(--blue); color: #fff; }
-  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-sm { padding: 4px 12px; font-size: 12px; }
-  textarea { width: 100%; height: 80px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-family: monospace; resize: vertical; }
-  .msg { font-size: 13px; padding: 6px 0; }
-  .msg.info { color: var(--blue); }
-  .msg.ok { color: var(--green); }
-  .msg.fail { color: var(--red); }
-  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #ccc; border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 4px; vertical-align: middle; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  textarea { width: 100%; height: 75px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-family: monospace; resize: vertical; }
+  .msg { font-size: 13px; padding: 4px 0; }
+  .msg.info { color: var(--blue); } .msg.ok { color: var(--green); } .msg.err { color: var(--red); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: var(--blue); border-radius: 50%; animation: s .6s linear infinite; margin-right: 6px; vertical-align: middle; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  .hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .inline { display: flex; gap: 10px; align-items: flex-start; }
+  .inline textarea { flex: 1; }
+  .footer { text-align: center; color: var(--muted); font-size: 11px; margin-top: 12px; }
+
+  /* 运行信息 */
+  .run-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 24px; font-size: 14px; }
+  .run-grid .label { color: var(--muted); }
+  .run-grid .val { font-weight: 500; }
 </style>
 </head>
 <body>
+
+<!-- ====== 头部：守护状态 ====== -->
 <div class="header">
   <h1>交易猫数据抓取 · 状态面板</h1>
-  <span id="daemon-badge" class="badge {{if eq .DaemonState "running"}}running{{else}}stopped{{end}}">
+  <span id="badge-daemon" class="badge {{if eq .DaemonState "running"}}on{{else}}off{{end}}">
     {{if eq .DaemonState "running"}}运行中{{else}}已停止{{end}}
   </span>
 </div>
 
-<div class="grid">
-  <!-- Cookie 卡片 -->
-  <div class="card">
-    <h2>Cookie 状态</h2>
-    {{if .Cookie.Present}}
-    <div class="row"><span class="label">令牌</span><span class="mono">{{.Cookie.MaskedValue}}</span></div>
-    <div class="row"><span class="label">状态</span>
-      {{if .Cookie.Valid}}<span class="badge ok">有效</span>{{else}}<span class="badge fail">无效</span>{{end}}
+<!-- ====== 区域 1：Cookie 状态 ====== -->
+<div class="section">
+  <h2><span class="icon">🔑</span> Cookie 状态</h2>
+  {{if .Cookie.Present}}
+  <div class="cookie-grid">
+    <div>
+      <div class="kv"><span class="l">令牌</span><span class="mono">{{.Cookie.MaskedValue}}</span></div>
+      <div class="kv"><span class="l">状态</span>
+        {{if .Cookie.Valid}}<span class="badge ok">有效</span>{{else}}<span class="badge err">无效</span>{{end}}
+      </div>
     </div>
-    <div class="row"><span class="label">过期时间</span><span>{{.Cookie.ExpiresAt | fmtTime}}</span></div>
-    <div class="row"><span class="label">剩余</span><span class="remaining {{.Cookie.RemainingSecs | remClass}}">{{.Cookie.RemainingSecs | fmtRemaining}}</span></div>
-    <div class="row"><span class="label">更新时间</span><span>{{.Cookie.UpdatedAt | fmtTime}}</span></div>
-    {{else}}
-    <div class="empty">Cookie 未加载</div>
-    {{end}}
-  </div>
-
-  <!-- 运行信息卡片 -->
-  <div class="card">
-    <h2>{{if .CurrentRun}}本轮抓取（进行中）{{else}}最近抓取{{end}}</h2>
-    {{if .CurrentRun}}
-    <div class="phase">当前阶段: {{.Phase}}</div>
-    <div class="row"><span class="label">开始</span><span>{{.CurrentRun.StartedAt | fmtTime}}</span></div>
-    {{else if .LastRun}}
-    <div class="row"><span class="label">开始</span><span>{{.LastRun.StartedAt | fmtTime}}</span></div>
-    <div class="row"><span class="label">结束</span><span>{{.LastRun.EndedAt | fmtTime}}</span></div>
-    <div class="row"><span class="label">耗时</span><span>{{.LastRun.DurationSec | fmtDur}}</span></div>
-    <div class="row"><span class="label">结果</span>
-      {{if .LastRun.Success}}<span class="badge ok">成功 · {{.LastRun.TotalOrders}} 条</span>
-      {{else}}<span class="badge fail">失败{{if .LastRun.Error}}: {{.LastRun.Error}}{{end}}</span>{{end}}
+    <div>
+      <div class="kv"><span class="l">过期时间</span><span>{{.Cookie.ExpiresAt | fmtTime}}</span></div>
+      <div class="kv"><span class="l">剩余</span><span class="ttl {{.Cookie.RemainingSecs | remClass}}">{{.Cookie.RemainingSecs | fmtRemaining}}</span></div>
+      <div class="kv"><span class="l">更新于</span><span>{{.Cookie.UpdatedAt | fmtTime}}</span></div>
     </div>
-    {{else}}
-    <div class="empty">暂无抓取记录</div>
-    {{end}}
   </div>
+  {{else}}
+  <div class="empty">Cookie 未加载，请使用下方"Cookie 获取"区域登录或手动导入</div>
+  {{end}}
 </div>
 
-<!-- Cookie 管理区域 -->
-<div class="grid">
-  <!-- 自动获取 Cookie -->
-  <div class="card">
-    <h2>自动获取 Cookie</h2>
-    <p class="hint" style="margin-bottom:10px">使用配置文件中的账号密码自动登录交易猫</p>
-    <div id="login-status">
-      {{if eq .LoginPhase "running"}}
-      <span class="msg info"><span class="spinner"></span>正在登录中…</span>
-      {{else if eq .LoginPhase "success"}}
-      <span class="msg ok">登录成功，Cookie 已更新</span>
-      {{else if eq .LoginPhase "failed"}}
-      <span class="msg fail">登录失败: {{.LoginError}}</span>
-      {{end}}
-    </div>
-    <button class="btn btn-primary" id="btn-login" onclick="triggerLogin()"
-      {{if eq .LoginPhase "running"}}disabled{{end}}>
-      {{if eq .LoginPhase "running"}}登录中…{{else}}获取 Cookie（自动登录）{{end}}
-    </button>
+<!-- ====== 区域 2：最近抓取 ====== -->
+<div class="section">
+  <h2><span class="icon">📋</span> 最近抓取</h2>
+  {{if .CurrentRun}}
+  <div class="run-grid">
+    <span class="label">状态</span><span class="val"><span class="spinner"></span> 进行中 — {{.Phase}}</span>
+    <span class="label">开始</span><span class="val">{{.CurrentRun.StartedAt | fmtTime}}</span>
   </div>
-
-  <!-- 手动导入 Cookie -->
-  <div class="card">
-    <h2>手动导入 Cookie</h2>
-    <p class="hint" style="margin-bottom:8px">
-      从浏览器中导出 Cookie（EditThisCookie 格式的 JSON 数组），粘贴到下方：<br>
-      <code>[{"name":"token","value":"xxx","domain":".jiaoyimao.com",...}, ...]</code>
-    </p>
-    <textarea id="cookie-json" placeholder='[{"name":"token","value":"...","domain":".jiaoyimao.com","path":"/","expirationDate":1735689600,...}]'></textarea>
-    <div id="import-msg"></div>
-    <button class="btn btn-primary" onclick="importCookies()" style="margin-top:8px">导入 Cookie</button>
+  {{else if .LastRun}}
+  <div class="run-grid">
+    <span class="label">开始</span><span class="val">{{.LastRun.StartedAt | fmtTime}}</span>
+    <span class="label">结束</span><span class="val">{{.LastRun.EndedAt | fmtTime}}</span>
+    <span class="label">耗时</span><span class="val">{{.LastRun.DurationSec | fmtDur}}</span>
+    <span class="label">状态</span><span class="val">
+      {{if .LastRun.Success}}<span class="badge ok">全部成功 · {{.LastRun.TotalOrders}} 条记录</span>
+      {{else}}<span class="badge err">{{.LastRun.Error}}</span>{{end}}
+    </span>
   </div>
+  {{else}}
+  <div class="empty">暂无抓取记录</div>
+  {{end}}
 </div>
 
-<!-- 游戏结果表格 -->
-<div class="card">
-  <h2>各游戏结果</h2>
+<!-- ====== 区域 3：各游戏数据（抓取 + 飞书写入） ====== -->
+<div class="section">
+  <h2><span class="icon">🎮</span> 各游戏数据 · 抓取与飞书写入结果</h2>
   {{if .Games}}
   <table>
-    <thead><tr><th>游戏</th><th>表格</th><th>结果</th></tr></thead>
+    <thead>
+      <tr><th>游戏</th><th>表格</th><th>抓取结果</th><th>飞书写入</th></tr>
+    </thead>
     <tbody>
     {{range .Games}}
     <tr>
       <td>{{.GameName}}</td>
-      <td>{{if .TableKey}}{{.TableKey}}{{else}}-{{end}}</td>
-      <td>{{if .Success}}<span class="badge ok">{{.RecordCount}} 条</span>
-        {{else}}<span class="badge fail">{{.Error}}</span>{{end}}</td>
+      <td>{{.TableKey}}</td>
+      <td>
+        {{if .Success}}
+        <span class="cell-ok">{{.RecordCount}} 条</span>
+        {{else}}
+        <span class="cell-err" title="{{.Error}}">抓取失败</span>
+        {{end}}
+      </td>
+      <td>
+        {{if .FeishuSynced}}
+          {{if .FeishuSyncError}}
+          <span class="cell-err" title="{{.FeishuSyncError}}">写入失败</span>
+          {{else}}
+          <span class="cell-ok">新增 {{.FeishuNewCount}} · 更新 {{.FeishuUpdCount}}</span>
+          {{end}}
+        {{else}}
+        <span style="color:var(--muted)">等待写入</span>
+        {{end}}
+      </td>
     </tr>
     {{end}}
     </tbody>
@@ -153,90 +157,59 @@
   {{end}}
 </div>
 
+<!-- ====== 区域 4：Cookie 获取 ====== -->
+<div class="section">
+  <h2><span class="icon">🔧</span> Cookie 获取</h2>
+  <div class="inline" style="margin-bottom:12px">
+    <div style="flex:1">
+      <div class="hint"><strong>自动获取</strong> — 使用配置文件中的账号密码，自动登录交易猫</div>
+      <div id="login-status">
+        {{if eq .LoginPhase "running"}}<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>
+        {{else if eq .LoginPhase "success"}}<span class="msg ok">✅ 登录成功，Cookie 已更新</span>
+        {{else if eq .LoginPhase "failed"}}<span class="msg err">❌ 登录失败: {{.LoginError}}</span>{{end}}
+      </div>
+      <button class="btn btn-primary" id="btn-login" onclick="triggerLogin()"
+        {{if eq .LoginPhase "running"}}disabled{{end}}>
+        {{if eq .LoginPhase "running"}}登录中…{{else}}获取 Cookie（自动登录）{{end}}
+      </button>
+    </div>
+    <div style="flex:1">
+      <div class="hint"><strong>手动导入</strong> — 粘贴浏览器导出的 EditThisCookie 格式 JSON</div>
+      <textarea id="cookie-json" placeholder='[{"name":"token","value":"...","domain":".jiaoyimao.com","path":"/","expirationDate":1735689600}]'></textarea>
+      <div id="import-msg"></div>
+      <button class="btn btn-primary" onclick="importCookies()" style="margin-top:6px">导入 Cookie</button>
+    </div>
+  </div>
+</div>
+
 <div class="footer">自动刷新 · 每 5 秒 · 服务器时间: {{.ServerTime | fmtTime}}</div>
 
 <script>
-async function triggerLogin() {
-  const btn = document.getElementById('btn-login');
-  btn.disabled = true;
-  btn.textContent = '登录中…';
-  document.getElementById('login-status').innerHTML = '<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>';
-  try {
-    const resp = await fetch('/api/login', { method: 'POST' });
-    const data = await resp.json();
-    if (data.status === 'already_running') {
-      document.getElementById('login-status').innerHTML = '<span class="msg info">登录已在执行中</span>';
-    }
-  } catch(e) {
-    document.getElementById('login-status').innerHTML = '<span class="msg fail">请求失败: ' + e.message + '</span>';
-    btn.disabled = false;
-    btn.textContent = '获取 Cookie（自动登录）';
-  }
-}
-
-async function importCookies() {
-  const raw = document.getElementById('cookie-json').value.trim();
-  if (!raw) { showImportMsg('请粘贴 Cookie JSON', 'fail'); return; }
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch(e) { showImportMsg('JSON 格式错误: ' + e.message, 'fail'); return; }
-  if (!Array.isArray(parsed)) { showImportMsg('需要 JSON 数组格式', 'fail'); return; }
-
-  showImportMsg('<span class="spinner"></span>导入中…', 'info');
-  try {
-    const resp = await fetch('/api/cookies', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(parsed)
-    });
-    const data = await resp.json();
-    if (resp.ok) {
-      showImportMsg('导入成功！共 ' + data.count + ' 个 Cookie', 'ok');
-      document.getElementById('cookie-json').value = '';
-      setTimeout(() => location.reload(), 1500);
-    } else {
-      showImportMsg('导入失败: ' + (data.error || await resp.text()), 'fail');
-    }
-  } catch(e) {
-    showImportMsg('请求失败: ' + e.message, 'fail');
-  }
-}
-
-function showImportMsg(msg, cls) {
-  const el = document.getElementById('import-msg');
-  el.innerHTML = '<span class="msg ' + cls + '">' + msg + '</span>';
-}
-
-// 轮询刷新
-(async function refresh() {
-  try {
-    const resp = await fetch('/api/status');
-    const s = await resp.json();
-    const db = document.getElementById('daemon-badge');
-    db.textContent = s.daemon_state === 'running' ? '运行中' : '已停止';
-    db.className = 'badge ' + (s.daemon_state === 'running' ? 'running' : 'stopped');
-
-    // 登录状态变化时刷新页面（登录完成/失败）
-    if (s.login_phase === 'success' || s.login_phase === 'failed') {
-      const prevPhase = '{{.LoginPhase}}';
-      if (prevPhase === 'running') { location.reload(); return; }
-    }
-
-    const remainEl = document.querySelector('.remaining');
-    if (remainEl && s.cookie && s.cookie.remaining_seconds !== undefined) {
-      const cls = s.cookie.remaining_seconds <= 0 ? 'expired' :
-                  s.cookie.remaining_seconds < 3600 ? 'critical' :
-                  s.cookie.remaining_seconds < 86400 ? 'warn' : 'ok';
-      remainEl.className = 'remaining ' + cls;
-      let label;
-      if (s.cookie.remaining_seconds <= 0) label = '已过期';
-      else { const d = s.cookie.remaining_seconds; label = d >= 3600 ? Math.floor(d/3600)+'h'+Math.floor((d%3600)/60)+'m' : Math.floor(d/60)+'m'+Math.floor(d%60)+'s'; }
-      remainEl.textContent = label;
-    }
-    const footerEl = document.querySelector('.footer');
-    if (footerEl) footerEl.textContent = '自动刷新 · 每 5 秒 · 服务器时间: ' + (s.server_time || '');
-  } catch(e) {}
-  setTimeout(refresh, 5000);
-})();
+async function triggerLogin(){
+  const b=document.getElementById('btn-login');b.disabled=true;b.textContent='登录中…';
+  document.getElementById('login-status').innerHTML='<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>';
+  try{const r=await fetch('/api/login',{method:'POST'});const d=await r.json();
+    if(d.status==='already_running')document.getElementById('login-status').innerHTML='<span class="msg info">登录已在执行中</span>'}
+  catch(e){document.getElementById('login-status').innerHTML='<span class="msg err">请求失败: '+e.message+'</span>';b.disabled=false;b.textContent='获取 Cookie（自动登录）';}}
+async function importCookies(){
+  const raw=document.getElementById('cookie-json').value.trim();if(!raw){m('请粘贴 Cookie JSON','err');return}
+  let p;try{p=JSON.parse(raw)}catch(e){m('JSON 格式错误: '+e.message,'err');return}
+  if(!Array.isArray(p)){m('需要 JSON 数组格式','err');return}
+  m('<span class="spinner"></span>导入中…','info');
+  try{const r=await fetch('/api/cookies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});const d=await r.json();
+    if(r.ok){m('导入成功！共 '+d.count+' 个 Cookie','ok');document.getElementById('cookie-json').value='';setTimeout(()=>location.reload(),1500)}
+    else m('导入失败: '+(d.error||await r.text()),'err')}catch(e){m('请求失败: '+e.message,'err')}}
+function m(msg,cls){document.getElementById('import-msg').innerHTML='<span class="msg '+cls+'">'+msg+'</span>'}
+(async function poll(){
+  try{const r=await fetch('/api/status');const s=await r.json();
+    const db=document.getElementById('badge-daemon');db.textContent=s.daemon_state==='running'?'运行中':'已停止';db.className='badge '+(s.daemon_state==='running'?'on':'off');
+    if(s.login_phase==='success'||s.login_phase==='failed'){if('{{.LoginPhase}}'==='running'){location.reload();return}}
+    const el=document.querySelector('.ttl');if(el&&s.cookie&&s.cookie.remaining_seconds!==undefined){
+      const c=s.cookie.remaining_seconds<=0?'bad':s.cookie.remaining_seconds<3600?'bad':s.cookie.remaining_seconds<86400?'warn':'ok';el.className='ttl '+c;
+      const d=s.cookie.remaining_seconds;el.textContent=d<=0?'已过期':d>=3600?Math.floor(d/3600)+'h'+Math.floor((d%3600)/60)+'m':Math.floor(d/60)+'m'+Math.floor(d%60)+'s';}
+    const fe=document.querySelector('.footer');if(fe)fe.textContent='自动刷新 · 每 5 秒 · 服务器时间: '+(s.server_time||'');
+  }catch(e){}
+  setTimeout(poll,5000);})();
 </script>
 </body>
 </html>

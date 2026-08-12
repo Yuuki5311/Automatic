@@ -68,13 +68,24 @@ type RunInfo struct {
 	Error        string    `json:"error,omitempty"`
 }
 
-// GameResult 单表抓取结果。
+// GameResult 单表抓取+飞书写入的完整结果。
 type GameResult struct {
-	TableKey    string `json:"table_key"`
-	GameName    string `json:"game_name"`
-	Success     bool   `json:"success"`
-	RecordCount int    `json:"record_count"`
-	Error       string `json:"error,omitempty"`
+	TableKey        string `json:"table_key"`
+	GameName        string `json:"game_name"`
+	Success         bool   `json:"success"`
+	RecordCount     int    `json:"record_count"`
+	Error           string `json:"error,omitempty"`
+	FeishuSynced    bool   `json:"feishu_synced"`
+	FeishuNewCount  int    `json:"feishu_new,omitempty"`
+	FeishuUpdCount  int    `json:"feishu_updated,omitempty"`
+	FeishuSyncError string `json:"feishu_sync_error,omitempty"`
+}
+
+// FeishuSyncResult 单表飞书写入结果。
+type FeishuSyncResult struct {
+	NewCount int
+	UpdCount int
+	Err      error
 }
 
 // Store 线程安全的状态存储器。
@@ -176,6 +187,23 @@ func (s *Store) RecordGame(tableKey string, count int, err error) {
 		gr.Success = true
 	}
 	s.snap.Games = append(s.snap.Games, gr)
+}
+
+// RecordGameSync 更新某张表的飞书写入结果（按 tableKey 匹配）。
+func (s *Store) RecordGameSync(tableKey string, result FeishuSyncResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.snap.Games {
+		if s.snap.Games[i].TableKey == tableKey {
+			s.snap.Games[i].FeishuSynced = true
+			s.snap.Games[i].FeishuNewCount = result.NewCount
+			s.snap.Games[i].FeishuUpdCount = result.UpdCount
+			if result.Err != nil {
+				s.snap.Games[i].FeishuSyncError = result.Err.Error()
+			}
+			return
+		}
+	}
 }
 
 // Snapshot 返回当前状态快照（实时计算 RemainingSecs）。

@@ -155,10 +155,12 @@ func main() {
 			}
 
 			bitable := feishu.NewBitableOps(feishuClient, cfg.Feishu.BitableID)
-			if err := bitable.BatchInsertOrders(ctx, tableID, orders); err != nil {
-				slog.Error("写入飞书表格失败", "component", "main", "table", tableKey, "error", err)
+			newC, updC, syncErr := bitable.BatchInsertOrders(ctx, tableID, orders)
+			if syncErr != nil {
+				slog.Error("写入飞书表格失败", "component", "main", "table", tableKey, "error", syncErr)
 				syncErrCount++
 			}
+			st.RecordGameSync(tableKey, status.FeishuSyncResult{NewCount: newC, UpdCount: updC, Err: syncErr})
 			totalOrders += len(orders)
 		}
 

@@ -153,9 +153,8 @@ func (c *Client) ListRecords(ctx context.Context, tableID string) ([]models.Feis
 	return NewBitableOps(c, c.bitableID).listAllRecords(ctx, tableID)
 }
 
-// BatchInsertRecords 批量写入/更新回收订单记录（按 OrderID 去重）。
-// 便捷方法，使用配置中的 BitableID。
-func (c *Client) BatchInsertRecords(ctx context.Context, tableID string, records []models.RecycleOrder) error {
+// BatchInsertRecords 批量写入/更新回收订单记录（按 OrderID 去重），返回新增和更新数。
+func (c *Client) BatchInsertRecords(ctx context.Context, tableID string, records []models.RecycleOrder) (int, int, error) {
 	return NewBitableOps(c, c.bitableID).BatchInsertOrders(ctx, tableID, records)
 }
 

@@ -156,7 +156,14 @@
       "Bash(curl -s -X POST http://127.0.0.1:8080/api/cookies -H 'Content-Type: application/json' -d '[{\"name\":\"token\",\"value\":\"test123\",\"domain\":\".jiaoyimao.com\",\"path\":\"/\",\"expirationDate\":1800000000}]')",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('cookie:', d['cookie']['masked_value'], 'valid:', d['cookie']['valid']\\)\")",
       "Bash(timeout 10 bash -c 'curl -s -X POST http://127.0.0.1:8080/api/login 2>&1 && echo \"\" && curl -s http://127.0.0.1:8080/api/status 2>&1 | head -5')",
-      "Bash(git commit -m 'feat\\(web\\): add auto-login trigger and manual cookie import to dashboard *)"
+      "Bash(git commit -m 'feat\\(web\\): add auto-login trigger and manual cookie import to dashboard *)",
+      "Bash(sed -i 's/return fmt.Errorf\\(\"批量写入记录失败: %w\", err\\)/return 0, 0, fmt.Errorf\\(\"批量写入记录失败: %w\", err\\)/' internal/feishu/bitable.go)",
+      "Bash(sed -i 's/^\\\\treturn nil$/\\\\treturn len\\(newRecords\\), len\\(updateRecords\\), nil/' internal/feishu/bitable.go)",
+      "Bash(grep -n \"return nil$\" internal/feishu/client.go)",
+      "Bash(git checkout *)",
+      "Bash(sed -i 's/if err := b.BatchInsertOrders\\(/if _, _, err := b.BatchInsertOrders\\(/' internal/feishu/bitable_test.go)",
+      "Bash(sed -i 's/if err := c.BatchInsertRecords\\(/if _, _, err := c.BatchInsertRecords\\(/' internal/feishu/bitable_test.go)",
+      "Bash(git commit -m 'feat: add Feishu sync status to dashboard with 4-zone layout *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",

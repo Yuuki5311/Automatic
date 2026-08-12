@@ -147,7 +147,7 @@ func TestBatchInsertOrdersNewAndUpdate(t *testing.T) {
 		{OrderID: "A3", GameName: "原神", Price: 300, Status: "已完成"}, // 已存在 → 更新
 	}
 
-	if err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
 		t.Fatalf("BatchInsertOrders: %v", err)
 	}
 
@@ -219,7 +219,7 @@ func TestBatchInsertOrdersAllNew(t *testing.T) {
 		{OrderID: "C1", GameName: "原神"},
 		{OrderID: "C2", GameName: "崩铁"},
 	}
-	if err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
 		t.Fatalf("BatchInsertOrders: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestBatchInsertOrdersAllExisting(t *testing.T) {
 		{OrderID: "X1", GameName: "原神"},
 		{OrderID: "X2", GameName: "原神"},
 	}
-	if err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
 		t.Fatalf("BatchInsertOrders: %v", err)
 	}
 
@@ -285,10 +285,10 @@ func TestBatchInsertOrdersEmpty(t *testing.T) {
 
 	c := newTestClient(t, srv.URL)
 	b := NewBitableOps(c, testBitableID)
-	if err := b.BatchInsertOrders(context.Background(), testTableID, nil); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, nil); err != nil {
 		t.Fatalf("BatchInsertOrders(nil): %v", err)
 	}
-	if err := b.BatchInsertOrders(context.Background(), testTableID, []models.RecycleOrder{}); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, []models.RecycleOrder{}); err != nil {
 		t.Fatalf("BatchInsertOrders(empty): %v", err)
 	}
 }
@@ -313,7 +313,7 @@ func TestBatchInsertOrdersChunking(t *testing.T) {
 	for i := range orders {
 		orders[i] = models.RecycleOrder{OrderID: fmt.Sprintf("B%04d", i), GameName: "原神"}
 	}
-	if err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
 		t.Fatalf("BatchInsertOrders: %v", err)
 	}
 
@@ -352,7 +352,7 @@ func TestBatchInsertOrdersListFailureInsertsAnyway(t *testing.T) {
 	b := NewBitableOps(c, testBitableID)
 
 	orders := []models.RecycleOrder{{OrderID: "D1", GameName: "原神"}}
-	if err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
+	if _, _, err := b.BatchInsertOrders(context.Background(), testTableID, orders); err != nil {
 		t.Fatalf("BatchInsertOrders: %v", err)
 	}
 	// 文档化行为：拉取失败退化为全量新增，保证数据不丢
@@ -442,7 +442,7 @@ func TestClientBatchInsertRecordsConvenience(t *testing.T) {
 
 	c := newTestClient(t, srv.URL)
 	// 便捷方法：BitableID 取自 cfg.BitableID（newTestClient 注入）
-	if err := c.BatchInsertRecords(context.Background(), testTableID,
+	if _, _, err := c.BatchInsertRecords(context.Background(), testTableID,
 		[]models.RecycleOrder{{OrderID: "E1", GameName: "原神"}}); err != nil {
 		t.Fatalf("BatchInsertRecords: %v", err)
 	}

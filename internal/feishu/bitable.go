@@ -39,15 +39,15 @@ func NewBitableOps(client *Client, bitableID string) *BitableOps {
 	return &BitableOps{client: client, bitableID: bitableID}
 }
 
-// BatchInsertOrders 批量写入回收订单到多维表格。
+// BatchInsertOrders 批量写入回收订单到多维表格，返回新增和更新的记录数。
 // 策略：先分页拉取现有记录，按 OrderID 判断是新增（batch_create）还是更新（PUT 单条记录）。
 func (b *BitableOps) BatchInsertOrders(
 	ctx context.Context,
 	tableID string,
 	orders []models.RecycleOrder,
-) error {
+) (newCount, updatedCount int, err error) {
 	if len(orders) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	// 1. 拉取现有记录用于去重（拉取失败时退化为全部按新增处理，保证数据不丢）
@@ -96,7 +96,7 @@ func (b *BitableOps) BatchInsertOrders(
 		}
 		if err := b.client.doRequest(ctx, http.MethodPost, path,
 			map[string]interface{}{"records": records}, &result); err != nil {
-			return fmt.Errorf("批量写入记录失败: %w", err)
+			return 0, 0, fmt.Errorf("批量写入记录失败: %w", err)
 		}
 		slog.Info("批量新增记录", "component", "feishu", "count", len(batch), "table", tableID)
 	}
@@ -124,7 +124,7 @@ func (b *BitableOps) BatchInsertOrders(
 	}
 
 	slog.Info("处理完毕", "component", "feishu", "new", len(newRecords), "updated", len(updateRecords))
-	return nil
+	return len(newRecords), len(updateRecords), nil
 }
 
 // orderToFields 将回收订单转换为多维表格字段
