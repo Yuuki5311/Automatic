@@ -68,10 +68,13 @@ func (s *SliderSolver) Detect(ctx context.Context) (bool, error) {
 
 // detectSliderCaptcha 遍历常见滑块选择器，判断页面是否出现滑块验证码。
 // 供 SliderSolver 与 ThirdPartySolver 共用。
+//
+// 注意：CDP executor 只在 chromedp.Run 内部附加到 context，必须经
+// chromedp.Run 执行动作，直接调用 .Do(ctx) 会返回 ErrInvalidContext。
 func detectSliderCaptcha(ctx context.Context) (bool, error) {
 	for _, sel := range sliderSelectors {
 		var nodes []*cdp.Node
-		err := chromedp.Nodes(sel, &nodes, chromedp.ByQuery, chromedp.AtLeast(0)).Do(ctx)
+		err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.ByQuery, chromedp.AtLeast(0)))
 		if err == nil && len(nodes) > 0 {
 			return true, nil
 		}
@@ -85,7 +88,7 @@ func (s *SliderSolver) Solve(ctx context.Context) error {
 	for attempt := 0; attempt < s.maxRetry; attempt++ {
 		// 1. 截图带缺口的背景图（失败时尝试从 canvas 提取）
 		var bgBytes []byte
-		if err := chromedp.Screenshot(s.bgImgSelector, &bgBytes, chromedp.ByQuery).Do(ctx); err != nil {
+		if err := chromedp.Run(ctx, chromedp.Screenshot(s.bgImgSelector, &bgBytes, chromedp.ByQuery)); err != nil {
 			bgBytes = s.captureCanvas(ctx, s.bgImgSelector)
 		}
 
@@ -190,7 +193,9 @@ func (s *SliderSolver) simulateDrag(ctx context.Context, selector string, distan
 		const r = el.getBoundingClientRect();
 		return {x: r.x, y: r.y, width: r.width, height: r.height};
 	})()`, strconv.Quote(selector))
-	if err := chromedp.Evaluate(expr, &rect).Do(ctx); err != nil {
+	// 注意：CDP executor 只在 chromedp.Run 内部附加到 context，
+	// 鼠标事件与Evaluate必须经 chromedp.Run 执行，否则返回 ErrInvalidContext。
+	if err := chromedp.Run(ctx, chromedp.Evaluate(expr, &rect)); err != nil {
 		return fmt.Errorf("获取滑块位置失败: %w", err)
 	}
 	if rect.Width <= 0 || rect.Height <= 0 {
@@ -204,11 +209,11 @@ func (s *SliderSolver) simulateDrag(ctx context.Context, selector string, distan
 	trajectory := generateHumanTrajectory(distance)
 
 	// 1. 鼠标移动到滑块中心
-	if err := chromedp.MouseEvent(input.MouseMoved, startX, startY).Do(ctx); err != nil {
+	if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MouseMoved, startX, startY)); err != nil {
 		return err
 	}
 	// 2. 按下鼠标左键
-	if err := chromedp.MouseEvent(input.MousePressed, startX, startY, chromedp.ButtonLeft).Do(ctx); err != nil {
+	if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MousePressed, startX, startY, chromedp.ButtonLeft)); err != nil {
 		return err
 	}
 	// 3. 按轨迹逐步拖动（鼠标移动事件携带左键按下状态，模拟真实拖拽）
@@ -218,14 +223,14 @@ func (s *SliderSolver) simulateDrag(ctx context.Context, selector string, distan
 		}
 		// 轻微 Y 轴抖动模拟人类手部不稳定
 		y := startY + float64(i%3-1)*0.5
-		if err := chromedp.MouseEvent(input.MouseMoved, startX+offset, y, dragButtons).Do(ctx); err != nil {
+		if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MouseMoved, startX+offset, y, dragButtons)); err != nil {
 			return err
 		}
 		time.Sleep(dragDelay(i))
 	}
 	// 4. 在终点释放鼠标
 	finalX := startX + float64(distance)
-	if err := chromedp.MouseEvent(input.MouseReleased, finalX, startY, chromedp.ButtonLeft).Do(ctx); err != nil {
+	if err := chromedp.Run(ctx, chromedp.MouseEvent(input.MouseReleased, finalX, startY, chromedp.ButtonLeft)); err != nil {
 		return err
 	}
 
@@ -303,8 +308,10 @@ func (s *SliderSolver) captureCanvas(ctx context.Context, selector string) []byt
 		if (!canvas) return '';
 		return canvas.toDataURL('image/png').split(',')[1];
 	})()`, strconv.Quote(selector))
+	// 经 chromedp.Run 执行（CDP executor 只在 Run 内部附加到 context），
+	// 否则直接 Evaluate(...).Do(ctx) 会返回 ErrInvalidContext。
 	var base64Str string
-	if err := chromedp.Evaluate(expr, &base64Str).Do(ctx); err != nil || base64Str == "" {
+	if err := chromedp.Run(ctx, chromedp.Evaluate(expr, &base64Str)); err != nil || base64Str == "" {
 		return nil
 	}
 	decoded, err := base64.StdEncoding.DecodeString(base64Str)
