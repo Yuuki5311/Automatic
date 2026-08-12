@@ -21,13 +21,13 @@ func Navigate(url string) chromedp.Action {
 }
 
 // WaitVisible 等待元素在DOM中可见。
-func WaitVisible(selector string) chromedp.Action {
-	return chromedp.WaitVisible(selector, chromedp.ByQuery)
+func WaitVisible(selector string, opts ...chromedp.QueryOption) chromedp.Action {
+	return chromedp.WaitVisible(selector, opts...)
 }
 
 // WaitNotVisible 等待元素从DOM中消失。
-func WaitNotVisible(selector string) chromedp.Action {
-	return chromedp.WaitNotVisible(selector, chromedp.ByQuery)
+func WaitNotVisible(selector string, opts ...chromedp.QueryOption) chromedp.Action {
+	return chromedp.WaitNotVisible(selector, opts...)
 }
 
 // WaitReady 等待文档就绪状态为complete。
