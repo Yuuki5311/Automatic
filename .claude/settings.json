@@ -183,7 +183,10 @@
       "Bash(cd c:/Automatic && mkdir -p cmd/gui/assets && mv cmd/gui/frontend/* cmd/gui/assets/ && rmdir cmd/gui/frontend)",
       "Bash(timeout 15 ./cmd/gui/gui.exe)",
       "Bash(echo \"Exit: $?\")",
-      "Bash(git commit -m 'feat: add Wails v3 desktop GUI app *)"
+      "Bash(git commit -m 'feat: add Wails v3 desktop GUI app *)",
+      "Bash(./bin/gui.exe)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(git commit -m 'fix: suppress console window and fix config path for double-click launch *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",

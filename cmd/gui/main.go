@@ -4,6 +4,7 @@ import (
 	"embed"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -16,9 +17,17 @@ import (
 var assets embed.FS
 
 func main() {
-	cfgPath := "./configs/config.yaml"
+	// 默认配置路径：优先使用命令行参数，否则在 exe 同目录查找
+	cfgPath := ""
 	if len(os.Args) > 1 {
 		cfgPath = os.Args[1]
+	} else {
+		exe, _ := os.Executable()
+		cfgPath = filepath.Join(filepath.Dir(exe), "configs", "config.yaml")
+		if _, err := os.Stat(cfgPath); err != nil {
+			// 回退：开发模式下从当前目录查找
+			cfgPath = "./configs/config.yaml"
+		}
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
