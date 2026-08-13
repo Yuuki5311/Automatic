@@ -116,3 +116,32 @@ func TestFeishuRecordJSON(t *testing.T) {
 		t.Error("raw[fields] missing")
 	}
 }
+
+func TestBoardStatsSnapshotJSONRoundTrip(t *testing.T) {
+	now := time.Date(2026, 8, 13, 9, 0, 0, 0, time.Local)
+	snap := BoardStatsSnapshot{
+		Date:      "2026-08-12",
+		ScrapedAt: now,
+		Games: []GameBoardStats{{
+			GameName:  "原神",
+			GameID:    1009609,
+			TimeKey:   "yesterday",
+			FetchedAt: now,
+			Metrics: []BoardMetric{
+				{Title: "咨询量", Value: "186", Tips: "向您发起回收咨询的数量"},
+				{Title: "回收成功金额", Value: "9650.00", Unit: "元"},
+			},
+		}},
+	}
+	b, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got BoardStatsSnapshot
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Date != snap.Date || len(got.Games) != 1 || got.Games[0].Metrics[0].Value != "186" {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+}

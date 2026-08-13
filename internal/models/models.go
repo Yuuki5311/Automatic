@@ -39,3 +39,26 @@ type FeishuRecord struct {
 	RecordID string                 `json:"record_id"`
 	Fields   map[string]interface{} `json:"fields"`
 }
+
+type BoardMetric struct {
+	Title string `json:"title"`
+	Value string `json:"value"`
+	Unit  string `json:"unit,omitempty"`
+	Tips  string `json:"tips,omitempty"`
+}
+
+type GameBoardStats struct {
+	GameName  string        `json:"game_name"`
+	GameID    int           `json:"game_id"`
+	TimeKey   string        `json:"time_key"`
+	Metrics   []BoardMetric `json:"metrics"`
+	FetchedAt time.Time     `json:"fetched_at"`
+	RawJSON   string        `json:"raw_json,omitempty"`
+	Error     string        `json:"error,omitempty"`
+}
+
+type BoardStatsSnapshot struct {
+	Date      string           `json:"date"`
+	ScrapedAt time.Time        `json:"scraped_at"`
+	Games     []GameBoardStats `json:"games"`
+}

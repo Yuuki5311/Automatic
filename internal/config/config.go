@@ -43,6 +43,7 @@ type ScraperConfig struct {
 	Mode     string       `yaml:"mode"` // "api" | "browser" | "auto"
 	Games    []GameConfig `yaml:"games"`
 	CronExpr string       `yaml:"cron_expr"` // 定时抓取表达式
+	StatsDir string       `yaml:"stats_dir"`
 }
 
 type GameConfig struct {
@@ -83,6 +84,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Scraper.Mode == "" {
 		cfg.Scraper.Mode = "auto"
+	}
+	if cfg.Scraper.StatsDir == "" {
+		cfg.Scraper.StatsDir = "./data/stats"
 	}
 	if cfg.Captcha.MaxRetry == 0 {
 		cfg.Captcha.MaxRetry = 3

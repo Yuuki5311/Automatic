@@ -31,8 +31,9 @@ browser:
   debug_port: 9222
 
 scraper:
-  mode: "auto"             # auto: API优先，失败时用浏览器兜底
-  cron_expr: "0 */2 * * *" # 每2小时执行一次
+  mode: "api"             # api: 仅 API 抓取看板统计
+  cron_expr: "0 9 * * *"  # 每天 9:00 执行
+  stats_dir: "./data/stats"
   games:
     - name: "火影忍者"
       url: "/workbench/recycle/naruto"
