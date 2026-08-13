@@ -1,0 +1,17 @@
+{
+  "api": "mtop.com.jym.merchant.board.recyclestats",
+  "ret": ["SUCCESS::调用成功"],
+  "data": {
+    "result": [
+      {"title": "咨询量", "staData": "186", "properties": {"tips": "向您发起回收咨询的数量"}},
+      {"title": "发起报价量", "staData": "50", "properties": {"tips": "x"}},
+      {"title": "回收成功订单数", "staData": "19", "properties": {"tips": "x"}},
+      {"title": "回收成功金额", "staData": "9650.00", "staUnit": "元", "properties": {"tips": "x"}},
+      {"title": "回收成功率", "staData": "10.22", "staUnit": "%", "properties": {"tips": "x"}},
+      {"title": "回收满意度", "staData": "100.00", "staUnit": "%", "properties": {"tips": "x"}},
+      {"title": "回收主页咨询量", "staData": "0", "properties": {"tips": "x"}},
+      {"title": "回收主页成功订单数", "staData": "0", "properties": {"tips": "x"}}
+    ]
+  },
+  "v": "1.0"
+}
