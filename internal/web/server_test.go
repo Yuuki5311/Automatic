@@ -195,3 +195,48 @@ func TestDashboardLoginFailedRedStyle(t *testing.T) {
 		t.Fatal("cookie/login sections should use login-failed class for red styling")
 	}
 }
+
+func TestDashboardAccountsSection(t *testing.T) {
+	store := status.NewStore()
+	store.SetAccounts([]status.AccountStatus{
+		{ID: "acc-ok", Username: "13800000000", Enabled: true, LastStatus: "ok", CookieValid: true, HasPassword: true},
+		{ID: "acc-skip", Username: "skippeduser", Enabled: true, LastStatus: "skipped", LastError: "cookie expired", CookieValid: false, HasPassword: true},
+		{ID: "acc-err", Username: "erruser", Enabled: true, LastStatus: "error", LastError: "login failed", CookieValid: false, HasPassword: false},
+	})
+	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"账户管理",
+		"账号",
+		"添加账户",
+		"13800000000",
+		"skippeduser",
+		"erruser",
+		"导入 Cookie",
+		"立即抓取",
+		"/api/scrape",
+		"/api/accounts",
+		"/api/accounts/",
+		"/cookies",
+		"/login",
+		"s.accounts",
+		"acct-username",
+		"acct-password",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	if !strings.Contains(body, "triggerScrape") {
+		t.Error("立即抓取 handler missing")
+	}
+}

@@ -73,7 +73,17 @@
   .metrics { margin: 0; }
   .ops { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .cron-hint { font-size: 13px; color: var(--muted); }
-</style>
+
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn-secondary { background: #f3f4f6; color: var(--text); }
+  .btn-danger { background: #fef2f2; color: #991b1b; }
+  input[type=text], input[type=password] {
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; min-width: 160px;
+  }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .acct-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .acct-import { margin-top: 8px; }
+  .acct-import textarea { height: 64px; }</style>
 </head>
 <body>
 
@@ -182,40 +192,147 @@
   <div id="scrape-status"></div>
 </div>
 
-<!-- ====== 区域 5：Cookie 获取 ====== -->
+<!-- ====== 区域 5：账户管理 ====== -->
 <div class="section {{if eq .LoginPhase "failed"}}login-failed{{end}}">
-  <h2><span class="icon">🔧</span> Cookie 获取</h2>
-  <div class="inline" style="margin-bottom:12px">
-    <div style="flex:1">
-      <div class="hint"><strong>自动获取</strong> — 使用配置文件中的账号密码，自动登录交易猫</div>
-      <div id="login-status">
-        {{if eq .LoginPhase "running"}}<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>
-        {{else if eq .LoginPhase "success"}}<span class="msg ok">✅ 登录成功，Cookie 已更新</span>
-        {{else if eq .LoginPhase "failed"}}<span class="msg err">❌ 登录失败: {{.LoginError}}</span>{{end}}
-      </div>
-      <button class="btn btn-primary" id="btn-login" onclick="triggerLogin()"
-        {{if eq .LoginPhase "running"}}disabled{{end}}>
-        {{if eq .LoginPhase "running"}}登录中…{{else}}获取 Cookie（自动登录）{{end}}
-      </button>
-    </div>
-    <div style="flex:1">
-      <div class="hint"><strong>手动导入</strong> — 粘贴浏览器导出的 EditThisCookie 格式 JSON</div>
-      <textarea id="cookie-json" placeholder='[{"name":"token","value":"...","domain":".jiaoyimao.com","path":"/","expirationDate":1735689600}]'></textarea>
-      <div id="import-msg"></div>
-      <button class="btn btn-primary" onclick="importCookies()" style="margin-top:6px">导入 Cookie</button>
-    </div>
+  <h2><span class="icon">👤</span> 账户管理</h2>
+  <div class="hint">按账户导入 Cookie 或登录；立即抓取会对全部启用账户串行执行</div>
+  <div id="acct-login-status">
+    {{if eq .LoginPhase "running"}}<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>
+    {{else if eq .LoginPhase "success"}}<span class="msg ok">✅ 登录成功，Cookie 已更新</span>
+    {{else if eq .LoginPhase "failed"}}<span class="msg err">❌ 登录失败: {{.LoginError}}</span>{{end}}
   </div>
+  <table>
+    <thead>
+      <tr><th>账号</th><th>Cookie</th><th>状态</th><th>错误</th><th>操作</th></tr>
+    </thead>
+    <tbody id="accounts-tbody">
+    {{if .Accounts}}
+    {{range .Accounts}}
+      <tr data-id="{{.ID}}">
+        <td class="mono">{{.Username}}</td>
+        <td>{{if .CookieValid}}<span class="badge ok">有效</span>{{else}}<span class="badge err">无效</span>{{end}}</td>
+        <td>
+          {{if eq .LastStatus "ok"}}<span class="badge ok">ok</span>
+          {{else if eq .LastStatus "skipped"}}<span class="badge warn">skipped</span>
+          {{else if eq .LastStatus "error"}}<span class="badge err">error</span>
+          {{else}}<span class="badge info">{{if .LastStatus}}{{.LastStatus}}{{else}}-{{end}}</span>{{end}}
+        </td>
+        <td>{{if .LastError}}{{.LastError}}{{else}}-{{end}}</td>
+        <td>
+          <div class="acct-actions">
+            <button class="btn btn-sm btn-secondary" onclick="toggleImport('{{.ID}}')">导入 Cookie</button>
+            <button class="btn btn-sm btn-primary" onclick="loginAccount('{{.ID}}')">登录</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteAccount('{{.ID}}')">删除</button>
+          </div>
+          <div class="acct-import" id="import-{{.ID}}" style="display:none">
+            <textarea id="cookie-json-{{.ID}}" placeholder='[{"name":"token","value":"...","domain":".jiaoyimao.com","path":"/","expirationDate":1735689600}]'></textarea>
+            <button class="btn btn-sm btn-primary" onclick="importAccountCookies('{{.ID}}')" style="margin-top:6px">确认导入</button>
+          </div>
+        </td>
+      </tr>
+    {{end}}
+    {{else}}
+      <tr><td colspan="5" class="empty">暂无账户，请在下方添加</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  <div class="form-row">
+    <input type="text" id="acct-username" placeholder="用户名" autocomplete="username">
+    <input type="password" id="acct-password" placeholder="密码" autocomplete="current-password">
+    <button class="btn btn-primary" onclick="addAccount()">添加账户</button>
+  </div>
+  <div id="acct-msg"></div>
 </div>
 
 <div class="footer">自动刷新 · 每 5 秒 · 服务器时间: {{.ServerTime | fmtTime}}</div>
 
 <script>
-async function triggerLogin(){
-  const b=document.getElementById('btn-login');b.disabled=true;b.textContent='登录中…';
-  document.getElementById('login-status').innerHTML='<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>';
-  try{const r=await fetch('/api/login',{method:'POST'});const d=await r.json();
-    if(d.status==='already_running')document.getElementById('login-status').innerHTML='<span class="msg info">登录已在执行中</span>'}
-  catch(e){document.getElementById('login-status').innerHTML='<span class="msg err">请求失败: '+e.message+'</span>';b.disabled=false;b.textContent='获取 Cookie（自动登录）';}}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function acctMsg(msg,cls){const el=document.getElementById('acct-msg');if(el)el.innerHTML='<span class="msg '+cls+'">'+msg+'</span>'}
+function statusBadge(st){
+  const v=st||'';
+  if(!v)return '<span class="badge info">-</span>';
+  if(v==='ok')return '<span class="badge ok">ok</span>';
+  if(v==='skipped')return '<span class="badge warn">skipped</span>';
+  if(v==='error')return '<span class="badge err">error</span>';
+  return '<span class="badge info">'+esc(v)+'</span>';
+}
+function renderAccounts(list){
+  const tb=document.getElementById('accounts-tbody');if(!tb)return;
+  if(!list||!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">暂无账户，请在下方添加</td></tr>';return}
+  tb.innerHTML=list.map(a=>{
+    const id=esc(a.id);
+    return '<tr data-id="'+id+'">'+
+      '<td class="mono">'+esc(a.username)+'</td>'+
+      '<td>'+(a.cookie_valid?'<span class="badge ok">有效</span>':'<span class="badge err">无效</span>')+'</td>'+
+      '<td>'+statusBadge(a.last_status)+'</td>'+
+      '<td>'+(a.last_error?esc(a.last_error):'-')+'</td>'+
+      '<td><div class="acct-actions">'+
+        '<button class="btn btn-sm btn-secondary" onclick="toggleImport(\''+id+'\')">导入 Cookie</button>'+
+        '<button class="btn btn-sm btn-primary" onclick="loginAccount(\''+id+'\')">登录</button>'+
+        '<button class="btn btn-sm btn-danger" onclick="deleteAccount(\''+id+'\')">删除</button>'+
+      '</div><div class="acct-import" id="import-'+id+'" style="display:none">'+
+        '<textarea id="cookie-json-'+id+'" placeholder=\'[{"name":"token","value":"..."}]\'></textarea>'+
+        '<button class="btn btn-sm btn-primary" onclick="importAccountCookies(\''+id+'\')" style="margin-top:6px">确认导入</button>'+
+      '</div></td></tr>';
+  }).join('');
+}
+async function refreshAccounts(){
+  try{const r=await fetch('/api/status');const s=await r.json();renderAccounts(s.accounts);return s}
+  catch(e){acctMsg('刷新失败: '+e.message,'err');return null}
+}
+async function addAccount(){
+  const u=document.getElementById('acct-username').value.trim();
+  const p=document.getElementById('acct-password').value;
+  if(!u||!p){acctMsg('请填写用户名和密码','err');return}
+  acctMsg('<span class="spinner"></span>添加中…','info');
+  try{
+    const r=await fetch('/api/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const t=await r.text();
+    if(!r.ok){acctMsg('添加失败: '+t,'err');return}
+    document.getElementById('acct-username').value='';
+    document.getElementById('acct-password').value='';
+    acctMsg('已添加账户','ok');
+    await refreshAccounts();
+  }catch(e){acctMsg('请求失败: '+e.message,'err')}
+}
+function toggleImport(id){
+  const el=document.getElementById('import-'+id);if(!el)return;
+  el.style.display=el.style.display==='none'?'block':'none';
+}
+async function importAccountCookies(id){
+  const ta=document.getElementById('cookie-json-'+id);const raw=(ta&&ta.value||'').trim();
+  if(!raw){acctMsg('请粘贴 Cookie JSON','err');return}
+  let p;try{p=JSON.parse(raw)}catch(e){acctMsg('JSON 格式错误: '+e.message,'err');return}
+  if(!Array.isArray(p)){acctMsg('需要 JSON 数组格式','err');return}
+  acctMsg('<span class="spinner"></span>导入中…','info');
+  try{
+    const r=await fetch('/api/accounts/'+encodeURIComponent(id)+'/cookies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    const t=await r.text();let d={};try{d=JSON.parse(t)}catch(e){}
+    if(r.ok){acctMsg('导入成功！共 '+(d.count||p.length)+' 个 Cookie','ok');if(ta)ta.value='';await refreshAccounts()}
+    else acctMsg('导入失败: '+(d.error||t),'err');
+  }catch(e){acctMsg('请求失败: '+e.message,'err')}
+}
+async function loginAccount(id){
+  const ls=document.getElementById('acct-login-status');
+  if(ls)ls.innerHTML='<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>';
+  try{
+    const r=await fetch('/api/accounts/'+encodeURIComponent(id)+'/login',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){if(ls)ls.innerHTML='<span class="msg err">登录失败: '+(d.error||r.status)+'</span>';return}
+    if(d.status==='already_running'&&ls)ls.innerHTML='<span class="msg info">登录已在执行中</span>';
+  }catch(e){if(ls)ls.innerHTML='<span class="msg err">请求失败: '+e.message+'</span>'}
+}
+async function deleteAccount(id){
+  if(!confirm('确定删除该账户？'))return;
+  acctMsg('<span class="spinner"></span>删除中…','info');
+  try{
+    const r=await fetch('/api/accounts/'+encodeURIComponent(id),{method:'DELETE'});
+    if(!r.ok){acctMsg('删除失败: '+await r.text(),'err');return}
+    acctMsg('已删除','ok');
+    await refreshAccounts();
+  }catch(e){acctMsg('请求失败: '+e.message,'err')}
+}
 async function triggerScrape(){
   const b=document.getElementById('btn-scrape');const st=document.getElementById('scrape-status');
   if(b){b.disabled=true;b.textContent='抓取中…';}
@@ -225,15 +342,6 @@ async function triggerScrape(){
     else if(d.status==='started'){if(st)st.innerHTML='<span class="msg info"><span class="spinner"></span>抓取进行中…</span>';setTimeout(()=>location.reload(),1200);}
     else {if(st)st.innerHTML='<span class="msg err">'+((d&&d.status)||'触发失败')+'</span>';if(b){b.disabled=false;b.textContent='立即抓取';}}}
   catch(e){if(st)st.innerHTML='<span class="msg err">请求失败: '+e.message+'</span>';if(b){b.disabled=false;b.textContent='立即抓取';}}}
-async function importCookies(){
-  const raw=document.getElementById('cookie-json').value.trim();if(!raw){m('请粘贴 Cookie JSON','err');return}
-  let p;try{p=JSON.parse(raw)}catch(e){m('JSON 格式错误: '+e.message,'err');return}
-  if(!Array.isArray(p)){m('需要 JSON 数组格式','err');return}
-  m('<span class="spinner"></span>导入中…','info');
-  try{const r=await fetch('/api/cookies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});const d=await r.json();
-    if(r.ok){m('导入成功！共 '+d.count+' 个 Cookie','ok');document.getElementById('cookie-json').value='';setTimeout(()=>location.reload(),1500)}
-    else m('导入失败: '+(d.error||await r.text()),'err')}catch(e){m('请求失败: '+e.message,'err')}}
-function m(msg,cls){document.getElementById('import-msg').innerHTML='<span class="msg '+cls+'">'+msg+'</span>'}
 function scrapeKey(s){
   return JSON.stringify({
     cur: !!(s&&s.current_run),
@@ -242,10 +350,20 @@ function scrapeKey(s){
     games: (s&&s.games)||[]
   });
 }
+function renderLoginStatus(s){
+  const ls=document.getElementById('acct-login-status');if(!ls)return;
+  if(s.login_phase==='running')ls.innerHTML='<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>';
+  else if(s.login_phase==='success')ls.innerHTML='<span class="msg ok">✅ 登录成功，Cookie 已更新</span>';
+  else if(s.login_phase==='failed')ls.innerHTML='<span class="msg err">❌ 登录失败: '+esc(s.login_error||'')+'</span>';
+}
 const renderedScrape = {cur:{{if .CurrentRun}}true{{else}}false{{end}}, date:'{{if .LastRun}}{{.LastRun.StatsDate}}{{end}}', n:{{len .Games}}};
 let prevScrapeKey = null;
+let prevAccountsKey = null;
 (async function poll(){
   try{const r=await fetch('/api/status');const s=await r.json();
+    const ak=JSON.stringify(s.accounts||[]);
+    if(ak!==prevAccountsKey){prevAccountsKey=ak;renderAccounts(s.accounts)}
+    renderLoginStatus(s);
     const k=scrapeKey(s);
     if(prevScrapeKey===null){
       prevScrapeKey=k;
