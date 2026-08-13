@@ -72,8 +72,13 @@ func main() {
 
 	// 5. 账户库（从 config.JYM 迁移遗留单账号）+ 状态 + 看板抓取流程
 	acctStore := accounts.NewStore(accounts.PathFromCookie(cfg.JYM.CookiePath))
-	_ = acctStore.Load()
-	_, _ = acctStore.MigrateFromConfig(cfg.JYM)
+	if err := acctStore.Load(); err != nil {
+		slog.Error("加载账户失败", "component", "main", "error", err)
+		os.Exit(1)
+	}
+	if _, err := acctStore.MigrateFromConfig(cfg.JYM); err != nil {
+		slog.Warn("迁移遗留账户失败", "component", "main", "error", err)
+	}
 
 	st := status.NewStore()
 	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st, acctStore)

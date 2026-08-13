@@ -73,13 +73,15 @@ type CookieInfo struct {
 
 // RunInfo 单次抓取运行信息。
 type RunInfo struct {
-	StartedAt   time.Time `json:"started_at"`
-	EndedAt     time.Time `json:"ended_at"`
-	DurationSec float64   `json:"duration_seconds"`
-	Success     bool      `json:"success"`
-	TotalOrders int       `json:"total_orders"` // 看板路径：成功游戏数
-	StatsDate   string    `json:"stats_date,omitempty"`
-	Error       string    `json:"error,omitempty"`
+	StartedAt       time.Time `json:"started_at"`
+	EndedAt         time.Time `json:"ended_at"`
+	DurationSec     float64   `json:"duration_seconds"`
+	Success         bool      `json:"success"`
+	TotalOrders     int       `json:"total_orders"` // 看板路径：成功游戏数
+	OkAccounts      int       `json:"ok_accounts,omitempty"`
+	SkippedAccounts int       `json:"skipped_accounts,omitempty"`
+	StatsDate       string    `json:"stats_date,omitempty"`
+	Error           string    `json:"error,omitempty"`
 }
 
 // GameResult 单表抓取+飞书写入的完整结果。
@@ -166,7 +168,8 @@ func (s *Store) RunStarted() {
 }
 
 // RunFinished 标记抓取完成，CurrentRun 移至 LastRun。
-func (s *Store) RunFinished(err error, totalOrders int) {
+// okAccounts / skippedAccounts 为本轮账户结果；无账户语义的路径传 0, 0。
+func (s *Store) RunFinished(err error, totalOrders, okAccounts, skippedAccounts int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.snap.CurrentRun == nil {
@@ -176,6 +179,8 @@ func (s *Store) RunFinished(err error, totalOrders int) {
 	r.EndedAt = time.Now()
 	r.DurationSec = r.EndedAt.Sub(r.StartedAt).Seconds()
 	r.TotalOrders = totalOrders
+	r.OkAccounts = okAccounts
+	r.SkippedAccounts = skippedAccounts
 	if err != nil {
 		r.Success = false
 		r.Error = err.Error()

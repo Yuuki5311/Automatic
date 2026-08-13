@@ -70,7 +70,7 @@ func TestRunFinishedPreservesStatsDateAndSuccessCount(t *testing.T) {
 	s := NewStore()
 	s.RunStarted()
 	s.SetStatsDate("2026-08-12")
-	s.RunFinished(nil, 3)
+	s.RunFinished(nil, 3, 1, 0)
 
 	snap := s.Snapshot()
 	if snap.LastRun == nil {
@@ -85,6 +85,9 @@ func TestRunFinishedPreservesStatsDateAndSuccessCount(t *testing.T) {
 	if !snap.LastRun.Success {
 		t.Fatal("expected success")
 	}
+	if snap.LastRun.OkAccounts != 1 || snap.LastRun.SkippedAccounts != 0 {
+		t.Fatalf("account counts=%+v", snap.LastRun)
+	}
 
 	raw, err := json.Marshal(snap.LastRun)
 	if err != nil {
@@ -96,6 +99,52 @@ func TestRunFinishedPreservesStatsDateAndSuccessCount(t *testing.T) {
 	}
 	if m["stats_date"] != "2026-08-12" {
 		t.Fatalf("json stats_date=%v", m["stats_date"])
+	}
+}
+
+func TestRunFinishedPartialSkipStaysSuccess(t *testing.T) {
+	s := NewStore()
+	s.RunStarted()
+	s.RunFinished(nil, 2, 1, 1)
+
+	snap := s.Snapshot()
+	if snap.LastRun == nil || !snap.LastRun.Success {
+		t.Fatalf("partial skip should succeed: %+v", snap.LastRun)
+	}
+	if snap.LastRun.OkAccounts != 1 || snap.LastRun.SkippedAccounts != 1 {
+		t.Fatalf("counts ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
+	}
+	if snap.LastRun.Error != "" {
+		t.Fatalf("Error=%q, want empty", snap.LastRun.Error)
+	}
+
+	raw, err := json.Marshal(snap.LastRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["ok_accounts"] != float64(1) || m["skipped_accounts"] != float64(1) {
+		t.Fatalf("json account counts: %s", raw)
+	}
+}
+
+func TestRunFinishedAllSkippedStoresError(t *testing.T) {
+	s := NewStore()
+	s.RunStarted()
+	s.RunFinished(errors.New("全部账户跳过"), 0, 0, 2)
+
+	snap := s.Snapshot()
+	if snap.LastRun == nil || snap.LastRun.Success {
+		t.Fatalf("all skipped should fail: %+v", snap.LastRun)
+	}
+	if snap.LastRun.Error != "全部账户跳过" {
+		t.Fatalf("Error=%q", snap.LastRun.Error)
+	}
+	if snap.LastRun.OkAccounts != 0 || snap.LastRun.SkippedAccounts != 2 {
+		t.Fatalf("counts ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
 	}
 }
 

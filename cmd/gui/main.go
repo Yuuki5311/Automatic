@@ -72,8 +72,13 @@ func main() {
 	st := status.NewStore()
 
 	acctStore := accounts.NewStore(accounts.PathFromCookie(cfg.JYM.CookiePath))
-	_ = acctStore.Load()
-	_, _ = acctStore.MigrateFromConfig(cfg.JYM)
+	if err := acctStore.Load(); err != nil {
+		slog.Error("加载账户失败", "error", err)
+		os.Exit(1)
+	}
+	if _, err := acctStore.MigrateFromConfig(cfg.JYM); err != nil {
+		slog.Warn("迁移遗留账户失败", "error", err)
+	}
 
 	// 启动 HTTP 仪表盘（复用 web 包，含 / /api/status /api/login /api/cookies）
 	webSrv, err := web.New(st, cfg, loginSvc, browserMgr, captchaSolver, acctStore)

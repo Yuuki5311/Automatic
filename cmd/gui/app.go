@@ -146,7 +146,7 @@ func (a *App) runScrape() {
 	cookies, err := a.loginSvc.RefreshIfNeeded(ctx, a.cfg, a.captchaSolver)
 	if err != nil {
 		slog.Error("Cookie准备失败", "error", err)
-		a.store.RunFinished(err, 0)
+		a.store.RunFinished(err, 0, 0, 0)
 		return
 	}
 	a.store.SetCookie(cookies, auth.IsCookieValid(cookies))
@@ -170,7 +170,7 @@ func (a *App) runScrape() {
 	allOrders, err := scraperMgr.ScrapeAll(ctx)
 	if err != nil {
 		slog.Error("抓取数据失败", "error", err)
-		a.store.RunFinished(err, 0)
+		a.store.RunFinished(err, 0, 0, 0)
 		return
 	}
 
@@ -199,6 +199,6 @@ func (a *App) runScrape() {
 	if syncErrCount > 0 {
 		runErr = fmt.Errorf("%d 个飞书表格同步失败", syncErrCount)
 	}
-	a.store.RunFinished(runErr, totalOrders)
+	a.store.RunFinished(runErr, totalOrders, 0, 0)
 	slog.Info("========== 抓取完成 ==========")
 }

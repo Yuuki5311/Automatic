@@ -1,6 +1,7 @@
 package accounts
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -55,6 +56,31 @@ func TestPathFromCookie(t *testing.T) {
 	empty := PathFromCookie("  ")
 	if empty != filepath.Join("data", "accounts.json") {
 		t.Fatalf("PathFromCookie(empty)=%q, want data/accounts.json", empty)
+	}
+}
+
+func TestLoadCorruptJSONReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "accounts.json")
+	if err := os.WriteFile(path, []byte("{not-json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(path)
+	if err := s.Load(); err == nil {
+		t.Fatal("expected error for corrupt JSON")
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("corrupt load must not populate accounts: %+v", s.List())
+	}
+}
+
+func TestLoadMissingFileIsEmpty(t *testing.T) {
+	s := NewStore(filepath.Join(t.TempDir(), "missing.json"))
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("missing file should be empty, got %+v", s.List())
 	}
 }
 

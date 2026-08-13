@@ -60,6 +60,13 @@ func TestBoardRun_SkipsFailedAccountContinues(t *testing.T) {
 	if bad.LastStatus != "skipped" || good.LastStatus != "ok" {
 		t.Fatalf("bad=%+v good=%+v", bad, good)
 	}
+	snap := st.Snapshot()
+	if snap.LastRun == nil || !snap.LastRun.Success {
+		t.Fatalf("partial skip should succeed: %+v", snap.LastRun)
+	}
+	if snap.LastRun.OkAccounts != 1 || snap.LastRun.SkippedAccounts != 1 {
+		t.Fatalf("ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
+	}
 }
 
 func TestBoardRunRecordsMetricsAndStatsDate(t *testing.T) {
@@ -100,6 +107,9 @@ func TestBoardRunRecordsMetricsAndStatsDate(t *testing.T) {
 	if snap.LastRun.TotalOrders != 1 {
 		t.Fatalf("TotalOrders=%d", snap.LastRun.TotalOrders)
 	}
+	if snap.LastRun.OkAccounts != 1 || snap.LastRun.SkippedAccounts != 0 {
+		t.Fatalf("ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
+	}
 	if len(snap.Games) != 1 || snap.Games[0].GameName != "原神" || snap.Games[0].RecordCount != 1 {
 		t.Fatalf("games=%+v", snap.Games)
 	}
@@ -135,8 +145,14 @@ func TestBoardRunCookieFailureMarksLoginFailed(t *testing.T) {
 		t.Fatalf("account=%+v ok=%v", got, ok)
 	}
 	snap := st.Snapshot()
-	if snap.LastRun == nil || !snap.LastRun.Success {
-		t.Fatalf("overall run should finish after skip: %+v", snap.LastRun)
+	if snap.LastRun == nil || snap.LastRun.Success {
+		t.Fatalf("all skipped should fail: %+v", snap.LastRun)
+	}
+	if snap.LastRun.Error != "全部账户跳过" {
+		t.Fatalf("Error=%q", snap.LastRun.Error)
+	}
+	if snap.LastRun.OkAccounts != 0 || snap.LastRun.SkippedAccounts != 1 {
+		t.Fatalf("ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
 	}
 }
 
@@ -173,8 +189,14 @@ func TestBoardRunKeepsMetricsOnSaveFailure(t *testing.T) {
 	if len(snap.Games) != 1 || snap.Games[0].GameName != "鸣潮" {
 		t.Fatalf("expected in-memory game result: %+v", snap.Games)
 	}
-	if snap.LastRun == nil || !snap.LastRun.Success {
-		t.Fatalf("overall run should finish after skip: %+v", snap.LastRun)
+	if snap.LastRun == nil || snap.LastRun.Success {
+		t.Fatalf("all skipped should fail: %+v", snap.LastRun)
+	}
+	if snap.LastRun.Error != "全部账户跳过" {
+		t.Fatalf("Error=%q", snap.LastRun.Error)
+	}
+	if snap.LastRun.OkAccounts != 0 || snap.LastRun.SkippedAccounts != 1 {
+		t.Fatalf("ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
 	}
 	got := as.Enabled()[0]
 	fresh, _ := as.Get(got.ID)

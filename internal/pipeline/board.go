@@ -113,27 +113,38 @@ func (r *BoardRun) Run() error {
 	if len(accts) == 0 {
 		err := errors.New("没有可用账户，请先在 UI 添加账号")
 		slog.Error("没有可用账户", "component", "pipeline", "error", err)
-		r.Store.RunFinished(err, 0)
+		r.Store.RunFinished(err, 0, 0, 0)
 		return nil
 	}
 
 	okGames := 0
+	okAccounts := 0
+	skippedAccounts := 0
 	lastPath := ""
 	for _, acct := range accts {
-		n, path := r.runAccount(acct, timeout, statsDir)
-		okGames += n
+		n, path, skipped := r.runAccount(acct, timeout, statsDir)
+		if skipped {
+			skippedAccounts++
+		} else {
+			okAccounts++
+			okGames += n
+		}
 		if path != "" {
 			lastPath = path
 		}
 	}
 
-	r.Store.RunFinished(nil, okGames)
+	var finishErr error
+	if skippedAccounts > 0 && okAccounts == 0 {
+		finishErr = errors.New("全部账户跳过")
+	}
+	r.Store.RunFinished(finishErr, okGames, okAccounts, skippedAccounts)
 	elapsed := time.Since(startTime)
-	slog.Info("========== 抓取完成 ==========", "component", "pipeline", "duration", elapsed.String(), "path", lastPath, "games", okGames)
+	slog.Info("========== 抓取完成 ==========", "component", "pipeline", "duration", elapsed.String(), "path", lastPath, "games", okGames, "ok_accounts", okAccounts, "skipped_accounts", skippedAccounts)
 	return nil
 }
 
-func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir string) (okGames int, path string) {
+func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir string) (okGames int, path string, skipped bool) {
 	r.Store.SetPhase(status.PhaseCookie)
 	ctx, cancel := context.Background(), func() {}
 	if r.NewContext != nil {
@@ -145,7 +156,7 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 		slog.Error("Cookie准备失败", "component", "pipeline", "account", acct.Username, "error", err)
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", err.Error())
 		cancel()
-		return 0, ""
+		return 0, "", true
 	}
 	r.Store.SetCookie(cookies, auth.IsCookieValid(cookies))
 	r.Store.SetLoginPhase(status.LoginIdle, "")
@@ -157,7 +168,7 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 	if err != nil {
 		slog.Error("抓取数据失败", "component", "pipeline", "account", acct.Username, "error", err)
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", err.Error())
-		return 0, ""
+		return 0, "", true
 	}
 	recordBoardGames(r.Store, snap)
 	if snap.Date != "" {
@@ -166,13 +177,13 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 
 	if r.Save == nil {
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", "save function not configured")
-		return 0, ""
+		return 0, "", true
 	}
 	path, saveErr := r.Save(statsDir, snap)
 	if saveErr != nil {
 		slog.Error("写入看板统计失败", "component", "pipeline", "account", acct.Username, "error", saveErr, "dir", statsDir)
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", saveErr.Error())
-		return 0, ""
+		return 0, "", true
 	}
 
 	if r.SyncFeishu != nil {
@@ -189,7 +200,7 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 			okGames++
 		}
 	}
-	return okGames, path
+	return okGames, path, false
 }
 
 func (r *BoardRun) prep(ctx context.Context, acct accounts.Account) (*models.CookieData, error) {

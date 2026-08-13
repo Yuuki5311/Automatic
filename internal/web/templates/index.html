@@ -132,7 +132,8 @@
     <span class="label">结束</span><span class="val">{{.LastRun.EndedAt | fmtTime}}</span>
     <span class="label">耗时</span><span class="val">{{.LastRun.DurationSec | fmtDur}}</span>
     <span class="label">状态</span><span class="val">
-      {{if .LastRun.Success}}<span class="badge ok">全部成功 · {{.LastRun.TotalOrders}} 个游戏</span>
+      {{if .LastRun.Success}}{{if gt .LastRun.SkippedAccounts 0}}<span class="badge ok">成功 {{.LastRun.OkAccounts}} / 跳过 {{.LastRun.SkippedAccounts}}</span>
+      {{else}}<span class="badge ok">全部成功 · {{.LastRun.TotalOrders}} 个游戏</span>{{end}}
       {{else}}<span class="badge err">{{.LastRun.Error}}</span>{{end}}
     </span>
   </div>

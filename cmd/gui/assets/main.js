@@ -45,7 +45,9 @@ function render(s) {
         <span class="label">结束</span><span>${fmtTime(s.last_run.ended_at)}</span>
         <span class="label">耗时</span><span>${fmtDur(s.last_run.duration_seconds)}</span>
         <span class="label">状态</span><span>${s.last_run.success
-          ?'<span class="badge ok">全部成功 · '+s.last_run.total_orders+' 条</span>'
+          ?(s.last_run.skipped_accounts>0
+            ?'<span class="badge ok">成功 '+s.last_run.ok_accounts+' / 跳过 '+s.last_run.skipped_accounts+'</span>'
+            :'<span class="badge ok">全部成功 · '+s.last_run.total_orders+' 条</span>')
           :'<span class="badge err">'+(s.last_run.error||'失败')+'</span>'}</span>`;
     } else { ra.innerHTML = '<div class="empty">暂无抓取记录</div>'; }
   }

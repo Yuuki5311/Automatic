@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -128,7 +129,7 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 		{Title: "咨询量", Value: "186"},
 		{Title: "回收成功金额", Value: "9650.00", Unit: "元"},
 	}, nil)
-	store.RunFinished(nil, 1)
+	store.RunFinished(nil, 1, 1, 0)
 
 	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
@@ -147,10 +148,53 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 		"本阶段未启用",
 		"2026-08-12",
 		"/api/scrape",
+		"全部成功",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
+	}
+}
+
+func TestDashboardSkipCountsInBanner(t *testing.T) {
+	store := status.NewStore()
+	store.RunStarted()
+	store.RunFinished(nil, 1, 1, 1)
+
+	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "成功 1 / 跳过 1") {
+		t.Fatalf("expected skip counts in banner, got %q", body)
+	}
+	if strings.Contains(body, "全部成功") {
+		t.Fatal("partial skip must not show 全部成功")
+	}
+}
+
+func TestDashboardAllSkippedBanner(t *testing.T) {
+	store := status.NewStore()
+	store.RunStarted()
+	store.RunFinished(errors.New("全部账户跳过"), 0, 0, 2)
+
+	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "全部账户跳过") {
+		t.Fatalf("expected all-skipped error, got %q", body)
+	}
+	if strings.Contains(body, "全部成功") {
+		t.Fatal("all skipped must not show 全部成功")
 	}
 }
 
