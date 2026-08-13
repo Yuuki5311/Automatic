@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
@@ -22,13 +23,18 @@ import (
 // BoardRun 看板抓取编排（Cookie → ScrapeBoardAll → 落盘 → 飞书 → 更新 status）。
 // 由 cmd/scraper 与 Web /api/scrape 共用，避免复制 runScrape。
 type BoardRun struct {
-	Cfg         *config.Config
-	Store       *status.Store
-	NewContext  func(timeoutSec int) (context.Context, context.CancelFunc)
-	PrepCookies func(ctx context.Context) (*models.CookieData, error)
-	Scrape      func(ctx context.Context, cookies *models.CookieData) (models.BoardStatsSnapshot, error)
-	Save        func(dir string, snap models.BoardStatsSnapshot) (string, error)
-	SyncFeishu  func(ctx context.Context, snap models.BoardStatsSnapshot) (newCount, updCount int, err error)
+	Cfg        *config.Config
+	Store      *status.Store
+	Accounts   *accounts.Store
+	LoginSvc   *auth.LoginService
+	Solver     captcha.Solver
+	Browser    *browser.Manager
+	NewContext func(timeoutSec int) (context.Context, context.CancelFunc)
+	// PrepAccountCookies / ScrapeAccount are test hooks; NewBoardRun wires production defaults.
+	PrepAccountCookies func(ctx context.Context, acct accounts.Account) (*models.CookieData, error)
+	ScrapeAccount      func(ctx context.Context, acct accounts.Account, cookies *models.CookieData) (models.BoardStatsSnapshot, error)
+	Save               func(dir string, snap models.BoardStatsSnapshot) (string, error)
+	SyncFeishu         func(ctx context.Context, snap models.BoardStatsSnapshot) (newCount, updCount int, err error)
 
 	mu sync.Mutex
 }
@@ -44,13 +50,18 @@ func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth
 		NewContext: func(timeoutSec int) (context.Context, context.CancelFunc) {
 			return browserMgr.NewContext(timeoutSec)
 		},
-		PrepCookies: func(ctx context.Context) (*models.CookieData, error) {
-			return loginSvc.RefreshIfNeeded(ctx, cfg, solver)
+		LoginSvc: loginSvc,
+		Solver:   solver,
+		Browser:  browserMgr,
+		PrepAccountCookies: func(ctx context.Context, acct accounts.Account) (*models.CookieData, error) {
+			acctCfg := cfg.WithJYMAccount(acct.Username, acct.Password, acct.CookiePath)
+			return loginSvc.RefreshIfNeeded(ctx, acctCfg, solver)
 		},
-		Scrape: func(ctx context.Context, cookies *models.CookieData) (models.BoardStatsSnapshot, error) {
-			mgr := scraper.NewManager(cfg, browserMgr, cookies)
+		ScrapeAccount: func(ctx context.Context, acct accounts.Account, cookies *models.CookieData) (models.BoardStatsSnapshot, error) {
+			acctCfg := cfg.WithJYMAccount(acct.Username, acct.Password, acct.CookiePath)
+			mgr := scraper.NewManager(acctCfg, browserMgr, cookies)
 			mgr.SetSessionRefresher(func(refreshCtx context.Context) (*models.CookieData, error) {
-				newC, refreshErr := loginSvc.RefreshIfNeeded(refreshCtx, cfg, solver)
+				newC, refreshErr := loginSvc.RefreshIfNeeded(refreshCtx, acctCfg, solver)
 				if refreshErr == nil {
 					st.SetCookie(newC, auth.IsCookieValid(newC))
 				}
@@ -86,7 +97,6 @@ func (r *BoardRun) Run() error {
 	startTime := time.Now()
 
 	r.Store.RunStarted()
-	r.Store.SetPhase(status.PhaseCookie)
 
 	timeout := 0
 	statsDir := ""
@@ -95,67 +105,104 @@ func (r *BoardRun) Run() error {
 		statsDir = r.Cfg.Scraper.StatsDir
 	}
 
+	var accts []accounts.Account
+	if r.Accounts != nil {
+		accts = r.Accounts.Enabled()
+	}
+	if len(accts) == 0 {
+		err := errors.New("没有可用账户，请先在 UI 添加账号")
+		slog.Error("没有可用账户", "component", "pipeline", "error", err)
+		r.Store.RunFinished(err, 0)
+		return nil
+	}
+
+	okGames := 0
+	lastPath := ""
+	for _, acct := range accts {
+		n, path := r.runAccount(acct, timeout, statsDir)
+		okGames += n
+		if path != "" {
+			lastPath = path
+		}
+	}
+
+	r.Store.RunFinished(nil, okGames)
+	elapsed := time.Since(startTime)
+	slog.Info("========== 抓取完成 ==========", "component", "pipeline", "duration", elapsed.String(), "path", lastPath, "games", okGames)
+	return nil
+}
+
+func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir string) (okGames int, path string) {
+	r.Store.SetPhase(status.PhaseCookie)
 	ctx, cancel := context.Background(), func() {}
 	if r.NewContext != nil {
 		ctx, cancel = r.NewContext(timeout)
 	}
-	defer cancel()
 
-	cookies, err := r.PrepCookies(ctx)
+	cookies, err := r.prep(ctx, acct)
 	if err != nil {
-		slog.Error("Cookie准备失败", "component", "pipeline", "error", err)
-		r.Store.SetLoginPhase(status.LoginFailed, err.Error())
-		r.Store.RunFinished(err, 0)
-		return nil
+		slog.Error("Cookie准备失败", "component", "pipeline", "account", acct.Username, "error", err)
+		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", err.Error())
+		cancel()
+		return 0, ""
 	}
 	r.Store.SetCookie(cookies, auth.IsCookieValid(cookies))
 	r.Store.SetLoginPhase(status.LoginIdle, "")
 
 	r.Store.SetPhase(status.PhaseScraping)
-
-	snap, err := r.Scrape(ctx, cookies)
+	snap, err := r.scrape(ctx, acct, cookies)
+	snap.Account = acct.Username
+	cancel()
+	if err != nil {
+		slog.Error("抓取数据失败", "component", "pipeline", "account", acct.Username, "error", err)
+		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", err.Error())
+		return 0, ""
+	}
 	recordBoardGames(r.Store, snap)
 	if snap.Date != "" {
 		r.Store.SetStatsDate(snap.Date)
 	}
-	if err != nil {
-		slog.Error("抓取数据失败", "component", "pipeline", "error", err)
-		r.Store.RunFinished(err, 0)
-		return nil
-	}
 
 	if r.Save == nil {
-		saveErr := errors.New("save function not configured")
-		r.Store.RunFinished(saveErr, 0)
-		return nil
+		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", "save function not configured")
+		return 0, ""
 	}
 	path, saveErr := r.Save(statsDir, snap)
 	if saveErr != nil {
-		slog.Error("写入看板统计失败", "component", "pipeline", "error", saveErr, "dir", statsDir)
-		r.Store.RunFinished(saveErr, 0)
-		return nil
+		slog.Error("写入看板统计失败", "component", "pipeline", "account", acct.Username, "error", saveErr, "dir", statsDir)
+		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", saveErr.Error())
+		return 0, ""
 	}
 
 	if r.SyncFeishu != nil {
-		newC, updC, syncErr := r.SyncFeishu(ctx, snap)
+		newC, updC, syncErr := r.SyncFeishu(context.Background(), snap)
 		if syncErr != nil {
-			slog.Error("同步飞书多维表格失败", "component", "pipeline", "error", syncErr)
+			slog.Error("同步飞书多维表格失败", "component", "pipeline", "account", acct.Username, "error", syncErr)
 		} else {
 			slog.Info("已同步飞书多维表格", "component", "pipeline", "new", newC, "updated", updC)
 		}
 	}
-
-	okGames := 0
+	_ = r.Accounts.UpdateStatus(acct.ID, "ok", "")
 	for _, g := range snap.Games {
 		if g.Error == "" {
 			okGames++
 		}
 	}
-	r.Store.RunFinished(nil, okGames)
+	return okGames, path
+}
 
-	elapsed := time.Since(startTime)
-	slog.Info("========== 抓取完成 ==========", "component", "pipeline", "duration", elapsed.String(), "path", path, "games", okGames)
-	return nil
+func (r *BoardRun) prep(ctx context.Context, acct accounts.Account) (*models.CookieData, error) {
+	if r.PrepAccountCookies != nil {
+		return r.PrepAccountCookies(ctx, acct)
+	}
+	return nil, errors.New("cookie prep not configured")
+}
+
+func (r *BoardRun) scrape(ctx context.Context, acct accounts.Account, cookies *models.CookieData) (models.BoardStatsSnapshot, error) {
+	if r.ScrapeAccount != nil {
+		return r.ScrapeAccount(ctx, acct, cookies)
+	}
+	return models.BoardStatsSnapshot{}, errors.New("scrape not configured")
 }
 
 func recordBoardGames(st *status.Store, snap models.BoardStatsSnapshot) {

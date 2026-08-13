@@ -9,25 +9,74 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/models"
 	"github.com/example/jiaoyimao-scraper/internal/statsstore"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
 
-func TestBoardRunRecordsMetricsAndStatsDate(t *testing.T) {
-	st := status.NewStore()
+func TestBoardRun_SkipsFailedAccountContinues(t *testing.T) {
 	dir := t.TempDir()
+	as := accounts.NewStore(filepath.Join(dir, "accounts.json"))
+	_ = as.Load()
+	a1, _ := as.Add("bad", "x")
+	a2, _ := as.Add("good", "y")
+	st := status.NewStore()
+	var scraped []string
 	r := &BoardRun{
-		Cfg:   &config.Config{Scraper: config.ScraperConfig{StatsDir: dir}},
-		Store: st,
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: filepath.Join(dir, "stats")}},
+		Store:    st,
+		Accounts: as,
 		NewContext: func(int) (context.Context, context.CancelFunc) {
 			return context.Background(), func() {}
 		},
-		PrepCookies: func(context.Context) (*models.CookieData, error) {
+		PrepAccountCookies: func(ctx context.Context, acct accounts.Account) (*models.CookieData, error) {
+			if acct.Username == "bad" {
+				return nil, errors.New("login failed")
+			}
+			return &models.CookieData{
+				Cookies:   []models.CookieEntry{{Name: "token", Value: "1"}},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+		ScrapeAccount: func(ctx context.Context, acct accounts.Account, c *models.CookieData) (models.BoardStatsSnapshot, error) {
+			scraped = append(scraped, acct.Username)
+			return models.BoardStatsSnapshot{
+				Date: "2026-08-12", Account: acct.Username,
+				Games: []models.GameBoardStats{{GameName: "原神"}},
+			}, nil
+		},
+		Save: statsstore.Save,
+	}
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if len(scraped) != 1 || scraped[0] != "good" {
+		t.Fatalf("scraped=%v", scraped)
+	}
+	bad, _ := as.Get(a1.ID)
+	good, _ := as.Get(a2.ID)
+	if bad.LastStatus != "skipped" || good.LastStatus != "ok" {
+		t.Fatalf("bad=%+v good=%+v", bad, good)
+	}
+}
+
+func TestBoardRunRecordsMetricsAndStatsDate(t *testing.T) {
+	st := status.NewStore()
+	dir := t.TempDir()
+	as := testAccountStore(t, "acc1")
+	r := &BoardRun{
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: dir}},
+		Store:    st,
+		Accounts: as,
+		NewContext: func(int) (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		},
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
 			return validCookie(), nil
 		},
-		Scrape: func(context.Context, *models.CookieData) (models.BoardStatsSnapshot, error) {
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
 			return models.BoardStatsSnapshot{
 				Date: "2026-08-12",
 				Games: []models.GameBoardStats{{
@@ -54,23 +103,26 @@ func TestBoardRunRecordsMetricsAndStatsDate(t *testing.T) {
 	if len(snap.Games) != 1 || snap.Games[0].GameName != "原神" || snap.Games[0].RecordCount != 1 {
 		t.Fatalf("games=%+v", snap.Games)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "2026-08-12", "_default.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "2026-08-12", "acc1.json")); err != nil {
 		t.Fatalf("expected saved snapshot: %v", err)
 	}
 }
 
 func TestBoardRunCookieFailureMarksLoginFailed(t *testing.T) {
 	st := status.NewStore()
+	as := testAccountStore(t, "only")
+	acct := as.Enabled()[0]
 	r := &BoardRun{
-		Cfg:   &config.Config{},
-		Store: st,
+		Cfg:      &config.Config{},
+		Store:    st,
+		Accounts: as,
 		NewContext: func(int) (context.Context, context.CancelFunc) {
 			return context.Background(), func() {}
 		},
-		PrepCookies: func(context.Context) (*models.CookieData, error) {
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
 			return nil, errors.New("login denied")
 		},
-		Scrape: func(context.Context, *models.CookieData) (models.BoardStatsSnapshot, error) {
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
 			t.Fatal("Scrape should not be called")
 			return models.BoardStatsSnapshot{}, nil
 		},
@@ -78,30 +130,30 @@ func TestBoardRunCookieFailureMarksLoginFailed(t *testing.T) {
 
 	r.Run()
 
+	got, ok := as.Get(acct.ID)
+	if !ok || got.LastStatus != "skipped" || got.LastError != "login denied" {
+		t.Fatalf("account=%+v ok=%v", got, ok)
+	}
 	snap := st.Snapshot()
-	if snap.LoginPhase != status.LoginFailed {
-		t.Fatalf("LoginPhase=%q", snap.LoginPhase)
-	}
-	if snap.LoginError != "login denied" {
-		t.Fatalf("LoginError=%q", snap.LoginError)
-	}
-	if snap.LastRun == nil || snap.LastRun.Success {
-		t.Fatalf("LastRun should be failed: %+v", snap.LastRun)
+	if snap.LastRun == nil || !snap.LastRun.Success {
+		t.Fatalf("overall run should finish after skip: %+v", snap.LastRun)
 	}
 }
 
 func TestBoardRunKeepsMetricsOnSaveFailure(t *testing.T) {
 	st := status.NewStore()
+	as := testAccountStore(t, "acc1")
 	r := &BoardRun{
-		Cfg:   &config.Config{Scraper: config.ScraperConfig{StatsDir: t.TempDir()}},
-		Store: st,
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: t.TempDir()}},
+		Store:    st,
+		Accounts: as,
 		NewContext: func(int) (context.Context, context.CancelFunc) {
 			return context.Background(), func() {}
 		},
-		PrepCookies: func(context.Context) (*models.CookieData, error) {
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
 			return validCookie(), nil
 		},
-		Scrape: func(context.Context, *models.CookieData) (models.BoardStatsSnapshot, error) {
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
 			return models.BoardStatsSnapshot{
 				Date: "2026-08-12",
 				Games: []models.GameBoardStats{{
@@ -121,25 +173,32 @@ func TestBoardRunKeepsMetricsOnSaveFailure(t *testing.T) {
 	if len(snap.Games) != 1 || snap.Games[0].GameName != "鸣潮" {
 		t.Fatalf("expected in-memory game result: %+v", snap.Games)
 	}
-	if snap.LastRun == nil || snap.LastRun.Success || snap.LastRun.Error != "disk full" {
-		t.Fatalf("LastRun=%+v", snap.LastRun)
+	if snap.LastRun == nil || !snap.LastRun.Success {
+		t.Fatalf("overall run should finish after skip: %+v", snap.LastRun)
+	}
+	got := as.Enabled()[0]
+	fresh, _ := as.Get(got.ID)
+	if fresh.LastStatus != "skipped" || fresh.LastError != "disk full" {
+		t.Fatalf("account=%+v", fresh)
 	}
 }
 
 func TestBoardRunSecondCallerGetsAlreadyRunning(t *testing.T) {
 	st := status.NewStore()
+	as := testAccountStore(t, "acc1")
 	started := make(chan struct{})
 	release := make(chan struct{})
 	r := &BoardRun{
-		Cfg:   &config.Config{},
-		Store: st,
+		Cfg:      &config.Config{},
+		Store:    st,
+		Accounts: as,
 		NewContext: func(int) (context.Context, context.CancelFunc) {
 			return context.Background(), func() {}
 		},
-		PrepCookies: func(context.Context) (*models.CookieData, error) {
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
 			return validCookie(), nil
 		},
-		Scrape: func(context.Context, *models.CookieData) (models.BoardStatsSnapshot, error) {
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
 			close(started)
 			<-release
 			return models.BoardStatsSnapshot{Date: "2026-08-12"}, nil
@@ -173,6 +232,20 @@ func TestBoardRunSecondCallerGetsAlreadyRunning(t *testing.T) {
 	if firstErr != nil {
 		t.Fatalf("first Run: %v", firstErr)
 	}
+}
+
+func testAccountStore(t *testing.T, usernames ...string) *accounts.Store {
+	t.Helper()
+	as := accounts.NewStore(filepath.Join(t.TempDir(), "accounts.json"))
+	if err := as.Load(); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range usernames {
+		if _, err := as.Add(u, "pw"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return as
 }
 
 func validCookie() *models.CookieData {
