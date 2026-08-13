@@ -24,6 +24,10 @@ func main() {
 	checkOnly := flag.Bool("check", true, "检查Cookie是否有效（默认执行，可传 -check=false 跳过）")
 	flag.Parse()
 
+	if *doLogin {
+		*checkOnly = false
+	}
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)

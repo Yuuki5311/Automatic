@@ -54,6 +54,7 @@ func main() {
 	browserMgr, err := browser.NewManager(&cfg.Browser)
 	if err != nil {
 		slog.Error("初始化浏览器失败", "error", err)
+		os.Exit(1)
 	}
 
 	var captchaSolver captcha.Solver

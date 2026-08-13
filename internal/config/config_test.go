@@ -162,6 +162,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Scraper.Mode != "auto" {
 		t.Errorf("Scraper.Mode default = %q, want %q", cfg.Scraper.Mode, "auto")
 	}
+	if cfg.Scraper.CronExpr != "0 9 * * *" {
+		t.Errorf("Scraper.CronExpr default = %q, want %q", cfg.Scraper.CronExpr, "0 9 * * *")
+	}
 	if cfg.Captcha.MaxRetry != 3 {
 		t.Errorf("Captcha.MaxRetry default = %d, want 3", cfg.Captcha.MaxRetry)
 	}

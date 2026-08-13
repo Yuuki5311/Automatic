@@ -88,6 +88,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Scraper.StatsDir == "" {
 		cfg.Scraper.StatsDir = "./data/stats"
 	}
+	if cfg.Scraper.CronExpr == "" {
+		cfg.Scraper.CronExpr = "0 9 * * *"
+	}
 	if cfg.Captcha.MaxRetry == 0 {
 		cfg.Captcha.MaxRetry = 3
 	}
