@@ -25,9 +25,7 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/logger"
-	"github.com/example/jiaoyimao-scraper/internal/models"
-	"github.com/example/jiaoyimao-scraper/internal/scraper"
-	"github.com/example/jiaoyimao-scraper/internal/statsstore"
+	"github.com/example/jiaoyimao-scraper/internal/pipeline"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 	"github.com/example/jiaoyimao-scraper/internal/web"
 )
@@ -71,8 +69,9 @@ func main() {
 	loginSvc := &auth.LoginService{}
 	captchaSolver := newCaptchaSolver(&cfg.Captcha)
 
-	// 5. 状态存储器（供 Web 仪表盘读取）
+	// 5. 状态存储器 + 共用看板抓取流程（Web /api/scrape 与 -once/-daemon 同一路径）
 	st := status.NewStore()
+	runScrape := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st).Run
 
 	// 6. 启动 Web 仪表盘（可选）
 	var webSrv *web.Server
@@ -81,6 +80,7 @@ func main() {
 		if err != nil {
 			slog.Error("初始化Web仪表盘失败", "component", "main", "error", err)
 		} else {
+			webSrv.SetScrapeFunc(runScrape)
 			go func() {
 				slog.Info("Web仪表盘已启动", "component", "main", "addr", cfg.Web.Addr)
 				if err := webSrv.ListenAndServe(cfg.Web.Addr); err != nil {
@@ -94,72 +94,7 @@ func main() {
 		st.SetDaemonState(status.DaemonRunning)
 	}
 
-	// 7. 核心抓取流程
-	runScrape := func() {
-		slog.Info("========== 开始抓取 ==========", "component", "main")
-		startTime := time.Now()
-
-		st.RunStarted()
-		st.SetPhase(status.PhaseCookie)
-
-		ctx, cancel := browserMgr.NewContext(cfg.Browser.TimeoutSec)
-		defer cancel()
-
-		// 检查Cookie有效性，无效则自动登录
-		cookies, err := loginSvc.RefreshIfNeeded(ctx, cfg, captchaSolver)
-		if err != nil {
-			slog.Error("Cookie准备失败", "component", "main", "error", err)
-			st.RunFinished(err, 0)
-			return
-		}
-		st.SetCookie(cookies, auth.IsCookieValid(cookies))
-
-		st.SetPhase(status.PhaseScraping)
-
-		// 初始化抓取管理器
-		scraperMgr := scraper.NewManager(cfg, browserMgr, cookies)
-
-		// 会话刷新回调（Cookie中途失效时自动重新登录 + 更新看板）
-		scraperMgr.SetSessionRefresher(func(refreshCtx context.Context) (*models.CookieData, error) {
-			newC, refreshErr := loginSvc.RefreshIfNeeded(refreshCtx, cfg, captchaSolver)
-			if refreshErr == nil {
-				st.SetCookie(newC, auth.IsCookieValid(newC))
-			}
-			return newC, refreshErr
-		})
-
-		// 结果回调（更新看板游戏结果表格）
-		scraperMgr.SetResultReporter(func(tableKey string, count int, reportErr error) {
-			st.RecordGame(tableKey, count, reportErr)
-		})
-
-		snap, err := scraperMgr.ScrapeBoardAll(ctx)
-		if err != nil {
-			slog.Error("抓取数据失败", "component", "main", "error", err)
-			st.RunFinished(err, 0)
-			return
-		}
-
-		path, saveErr := statsstore.Save(cfg.Scraper.StatsDir, snap)
-		if saveErr != nil {
-			slog.Error("写入看板统计失败", "component", "main", "error", saveErr, "dir", cfg.Scraper.StatsDir)
-			st.RunFinished(saveErr, 0)
-			return
-		}
-
-		okGames := 0
-		for _, g := range snap.Games {
-			if g.Error == "" {
-				okGames++
-			}
-		}
-		st.RunFinished(nil, okGames)
-
-		elapsed := time.Since(startTime)
-		slog.Info("========== 抓取完成 ==========", "component", "main", "duration", elapsed.String(), "path", path, "games", okGames)
-	}
-
-	// 8. 执行模式分支
+	// 7. 执行模式分支
 	if *once || (!*daemon) {
 		if *webFlag && !*daemon {
 			slog.Info("提示: -once 模式仪表盘仅在本次抓取期间可访问，常驻监控请用 -daemon -web", "component", "main")

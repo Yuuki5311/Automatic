@@ -19,66 +19,68 @@ const (
 type Phase string
 
 const (
-	PhaseIdle    Phase = "idle"
-	PhaseCookie  Phase = "cookie"
+	PhaseIdle     Phase = "idle"
+	PhaseCookie   Phase = "cookie"
 	PhaseScraping Phase = "scraping"
-	PhaseSyncing Phase = "syncing"
+	PhaseSyncing  Phase = "syncing"
 )
 
 // Snapshot 状态快照（JSON 序列化给前端）。
 type Snapshot struct {
-	DaemonState DaemonState `json:"daemon_state"`
-	Phase       Phase       `json:"phase"`
-	LoginPhase  LoginPhase  `json:"login_phase"`  // 独立登录进度（与抓取 phase 解耦）
-	LoginError  string      `json:"login_error,omitempty"`
-	Cookie      CookieInfo  `json:"cookie"`
-	CurrentRun  *RunInfo    `json:"current_run,omitempty"`
-	LastRun     *RunInfo    `json:"last_run,omitempty"`
+	DaemonState DaemonState  `json:"daemon_state"`
+	Phase       Phase        `json:"phase"`
+	LoginPhase  LoginPhase   `json:"login_phase"` // 独立登录进度（与抓取 phase 解耦）
+	LoginError  string       `json:"login_error,omitempty"`
+	Cookie      CookieInfo   `json:"cookie"`
+	CurrentRun  *RunInfo     `json:"current_run,omitempty"`
+	LastRun     *RunInfo     `json:"last_run,omitempty"`
 	Games       []GameResult `json:"games"`
-	ServerTime  time.Time   `json:"server_time"`
+	ServerTime  time.Time    `json:"server_time"`
 }
 
 // LoginPhase UI 触发的登录进度。
 type LoginPhase string
 
 const (
-	LoginIdle      LoginPhase = "idle"
-	LoginRunning   LoginPhase = "running"
-	LoginSuccess   LoginPhase = "success"
-	LoginFailed    LoginPhase = "failed"
+	LoginIdle    LoginPhase = "idle"
+	LoginRunning LoginPhase = "running"
+	LoginSuccess LoginPhase = "success"
+	LoginFailed  LoginPhase = "failed"
 )
 
 // CookieInfo Cookie 状态。
 type CookieInfo struct {
-	Present        bool      `json:"present"`
-	Valid          bool      `json:"valid"`
-	MaskedValue    string    `json:"masked_value"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	RemainingSecs  int64     `json:"remaining_seconds"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	Present       bool      `json:"present"`
+	Valid         bool      `json:"valid"`
+	MaskedValue   string    `json:"masked_value"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	RemainingSecs int64     `json:"remaining_seconds"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // RunInfo 单次抓取运行信息。
 type RunInfo struct {
-	StartedAt    time.Time `json:"started_at"`
-	EndedAt      time.Time `json:"ended_at"`
-	DurationSec  float64   `json:"duration_seconds"`
-	Success      bool      `json:"success"`
-	TotalOrders  int       `json:"total_orders"`
-	Error        string    `json:"error,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+	EndedAt     time.Time `json:"ended_at"`
+	DurationSec float64   `json:"duration_seconds"`
+	Success     bool      `json:"success"`
+	TotalOrders int       `json:"total_orders"` // 看板路径：成功游戏数
+	StatsDate   string    `json:"stats_date,omitempty"`
+	Error       string    `json:"error,omitempty"`
 }
 
 // GameResult 单表抓取+飞书写入的完整结果。
 type GameResult struct {
-	TableKey        string `json:"table_key"`
-	GameName        string `json:"game_name"`
-	Success         bool   `json:"success"`
-	RecordCount     int    `json:"record_count"`
-	Error           string `json:"error,omitempty"`
-	FeishuSynced    bool   `json:"feishu_synced"`
-	FeishuNewCount  int    `json:"feishu_new,omitempty"`
-	FeishuUpdCount  int    `json:"feishu_updated,omitempty"`
-	FeishuSyncError string `json:"feishu_sync_error,omitempty"`
+	TableKey        string               `json:"table_key"`
+	GameName        string               `json:"game_name"`
+	Success         bool                 `json:"success"`
+	RecordCount     int                  `json:"record_count"`
+	Metrics         []models.BoardMetric `json:"metrics,omitempty"`
+	Error           string               `json:"error,omitempty"`
+	FeishuSynced    bool                 `json:"feishu_synced"`
+	FeishuNewCount  int                  `json:"feishu_new,omitempty"`
+	FeishuUpdCount  int                  `json:"feishu_updated,omitempty"`
+	FeishuSyncError string               `json:"feishu_sync_error,omitempty"`
 }
 
 // FeishuSyncResult 单表飞书写入结果。
@@ -172,6 +174,15 @@ func (s *Store) RunFinished(err error, totalOrders int) {
 	s.snap.Phase = PhaseIdle
 }
 
+// SetStatsDate 写入当前轮次的看板统计日期（昨日 YYYY-MM-DD）。
+func (s *Store) SetStatsDate(date string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snap.CurrentRun != nil {
+		s.snap.CurrentRun.StatsDate = date
+	}
+}
+
 // RecordGame 记录单个表格的抓取结果。
 func (s *Store) RecordGame(tableKey string, count int, err error) {
 	s.mu.Lock()
@@ -185,6 +196,30 @@ func (s *Store) RecordGame(tableKey string, count int, err error) {
 		gr.Error = err.Error()
 	} else {
 		gr.Success = true
+	}
+	s.snap.Games = append(s.snap.Games, gr)
+}
+
+// RecordGameStats 按游戏名 upsert 看板指标结果。
+func (s *Store) RecordGameStats(gameName string, metrics []models.BoardMetric, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	gr := GameResult{
+		TableKey:    gameName,
+		GameName:    gameName,
+		RecordCount: len(metrics),
+		Metrics:     metrics,
+	}
+	if err != nil {
+		gr.Error = err.Error()
+	} else {
+		gr.Success = true
+	}
+	for i := range s.snap.Games {
+		if s.snap.Games[i].GameName == gameName {
+			s.snap.Games[i] = gr
+			return
+		}
 	}
 	s.snap.Games = append(s.snap.Games, gr)
 }
@@ -236,7 +271,7 @@ func maskCookieValue(data *models.CookieData) string {
 		return ""
 	}
 	// 优先取 session cookie（与 auth.IsCookieValid 同逻辑）
-	names := []string{"token", "SESSION", "jym_token"}
+	names := []string{"_m_h5_tk", "_m_h5_tk_enc", "token", "SESSION", "jym_token"}
 	for _, name := range names {
 		for _, c := range data.Cookies {
 			if c.Name == name && c.Value != "" {

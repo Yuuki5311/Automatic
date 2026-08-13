@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/auth"
@@ -21,13 +22,16 @@ var templatesFS embed.FS
 
 // Server Web 状态仪表盘服务器。
 type Server struct {
-	store        *status.Store
-	tmpl         *template.Template
-	srv          *http.Server
-	cfg          *config.Config
-	loginSvc     *auth.LoginService
-	browserMgr   *browser.Manager
+	store         *status.Store
+	tmpl          *template.Template
+	srv           *http.Server
+	cfg           *config.Config
+	loginSvc      *auth.LoginService
+	browserMgr    *browser.Manager
 	captchaSolver captcha.Solver
+	scrapeFn      func()
+	scrapeMu      sync.Mutex
+	scraping      bool
 }
 
 // New 创建 Web 服务器。
@@ -57,10 +61,18 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/cookies", s.handleCookies)
+	mux.HandleFunc("/api/scrape", s.handleScrape)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
 	return s, nil
+}
+
+// SetScrapeFunc 注入与主流程相同的看板抓取回调（由 cmd/scraper 或 gui 注入）。
+func (s *Server) SetScrapeFunc(fn func()) {
+	s.scrapeMu.Lock()
+	defer s.scrapeMu.Unlock()
+	s.scrapeFn = fn
 }
 
 // ListenAndServe 启动 HTTP 服务。
@@ -89,6 +101,45 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
+}
+
+// handleScrape 异步触发看板抓取。
+// POST /api/scrape
+func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.scrapeMu.Lock()
+	fn := s.scrapeFn
+	if fn == nil {
+		s.scrapeMu.Unlock()
+		http.Error(w, "scrape not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	snap := s.store.Snapshot()
+	if s.scraping || snap.CurrentRun != nil || snap.Phase == status.PhaseScraping || snap.Phase == status.PhaseCookie {
+		s.scrapeMu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"status": "already_running"})
+		return
+	}
+	s.scraping = true
+	s.scrapeMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.scrapeMu.Lock()
+			s.scraping = false
+			s.scrapeMu.Unlock()
+		}()
+		fn()
+	}()
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
 }
 
 // handleLogin 触发自动登录，异步执行。

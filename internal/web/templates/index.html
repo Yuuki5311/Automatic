@@ -60,6 +60,19 @@
   .run-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 24px; font-size: 14px; }
   .run-grid .label { color: var(--muted); }
   .run-grid .val { font-weight: 500; }
+
+  /* 登录失败：Cookie / 登录区域标红 */
+  .section.login-failed { border: 2px solid var(--red); background: #fef2f2; }
+  .section.login-failed h2 { color: #991b1b; }
+  .login-failed .msg.err { font-weight: 700; font-size: 14px; }
+
+  .game-block { margin-bottom: 16px; }
+  .game-block:last-child { margin-bottom: 0; }
+  .game-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .game-head .name { font-weight: 600; font-size: 14px; }
+  .metrics { margin: 0; }
+  .ops { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .cron-hint { font-size: 13px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -73,7 +86,7 @@
 </div>
 
 <!-- ====== 区域 1：Cookie 状态 ====== -->
-<div class="section">
+<div class="section {{if eq .LoginPhase "failed"}}login-failed{{end}}">
   <h2><span class="icon">🔑</span> Cookie 状态</h2>
   {{if .Cookie.Present}}
   <div class="cookie-grid">
@@ -104,11 +117,12 @@
   </div>
   {{else if .LastRun}}
   <div class="run-grid">
+    <span class="label">统计日期</span><span class="val">{{if .LastRun.StatsDate}}{{.LastRun.StatsDate}}{{else}}-{{end}}</span>
     <span class="label">开始</span><span class="val">{{.LastRun.StartedAt | fmtTime}}</span>
     <span class="label">结束</span><span class="val">{{.LastRun.EndedAt | fmtTime}}</span>
     <span class="label">耗时</span><span class="val">{{.LastRun.DurationSec | fmtDur}}</span>
     <span class="label">状态</span><span class="val">
-      {{if .LastRun.Success}}<span class="badge ok">全部成功 · {{.LastRun.TotalOrders}} 条记录</span>
+      {{if .LastRun.Success}}<span class="badge ok">全部成功 · {{.LastRun.TotalOrders}} 个游戏</span>
       {{else}}<span class="badge err">{{.LastRun.Error}}</span>{{end}}
     </span>
   </div>
@@ -117,48 +131,59 @@
   {{end}}
 </div>
 
-<!-- ====== 区域 3：各游戏数据（抓取 + 飞书写入） ====== -->
+<!-- ====== 区域 3：各游戏数据（看板指标） ====== -->
 <div class="section">
-  <h2><span class="icon">🎮</span> 各游戏数据 · 抓取与飞书写入结果</h2>
+  <h2><span class="icon">🎮</span> 各游戏数据</h2>
   {{if .Games}}
-  <table>
-    <thead>
-      <tr><th>游戏</th><th>表格</th><th>抓取结果</th><th>飞书写入</th></tr>
-    </thead>
-    <tbody>
-    {{range .Games}}
-    <tr>
-      <td>{{.GameName}}</td>
-      <td>{{.TableKey}}</td>
-      <td>
-        {{if .Success}}
-        <span class="cell-ok">{{.RecordCount}} 条</span>
-        {{else}}
-        <span class="cell-err" title="{{.Error}}">抓取失败</span>
-        {{end}}
-      </td>
-      <td>
-        {{if .FeishuSynced}}
-          {{if .FeishuSyncError}}
-          <span class="cell-err" title="{{.FeishuSyncError}}">写入失败</span>
-          {{else}}
-          <span class="cell-ok">新增 {{.FeishuNewCount}} · 更新 {{.FeishuUpdCount}}</span>
-          {{end}}
-        {{else}}
-        <span style="color:var(--muted)">等待写入</span>
-        {{end}}
-      </td>
-    </tr>
+  {{range .Games}}
+  <div class="game-block">
+    <div class="game-head">
+      <span class="name">{{.GameName}}</span>
+      {{if .Success}}<span class="badge ok">{{.RecordCount}} 项指标</span>
+      {{else}}<span class="badge err" title="{{.Error}}">抓取失败</span>{{end}}
+    </div>
+    {{if .Error}}<div class="msg err" style="margin-bottom:8px">{{.Error}}</div>{{end}}
+    {{if .Metrics}}
+    <table class="metrics">
+      <thead>
+        <tr><th>指标</th><th>数值</th><th>单位</th></tr>
+      </thead>
+      <tbody>
+      {{range .Metrics}}
+      <tr>
+        <td>{{.Title}}</td>
+        <td>{{.Value}}</td>
+        <td>{{if .Unit}}{{.Unit}}{{else}}-{{end}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else if .Success}}
+    <div class="empty">暂无指标</div>
     {{end}}
-    </tbody>
-  </table>
+    <div class="kv" style="margin-top:8px"><span class="l">飞书同步</span><span style="color:var(--muted)">本阶段未启用</span></div>
+  </div>
+  {{end}}
   {{else}}
   <div class="empty">暂无抓取记录</div>
   {{end}}
 </div>
 
-<!-- ====== 区域 4：Cookie 获取 ====== -->
+<!-- ====== 区域 4：操作 ====== -->
 <div class="section">
+  <h2><span class="icon">⚡</span> 操作</h2>
+  <div class="ops">
+    <button class="btn btn-primary" id="btn-scrape" onclick="triggerScrape()"
+      {{if .CurrentRun}}disabled{{end}}>
+      {{if .CurrentRun}}抓取中…{{else}}立即抓取{{end}}
+    </button>
+    <span class="cron-hint">下次定时：每天 09:00</span>
+  </div>
+  <div id="scrape-status"></div>
+</div>
+
+<!-- ====== 区域 5：Cookie 获取 ====== -->
+<div class="section {{if eq .LoginPhase "failed"}}login-failed{{end}}">
   <h2><span class="icon">🔧</span> Cookie 获取</h2>
   <div class="inline" style="margin-bottom:12px">
     <div style="flex:1">
@@ -191,6 +216,15 @@ async function triggerLogin(){
   try{const r=await fetch('/api/login',{method:'POST'});const d=await r.json();
     if(d.status==='already_running')document.getElementById('login-status').innerHTML='<span class="msg info">登录已在执行中</span>'}
   catch(e){document.getElementById('login-status').innerHTML='<span class="msg err">请求失败: '+e.message+'</span>';b.disabled=false;b.textContent='获取 Cookie（自动登录）';}}
+async function triggerScrape(){
+  const b=document.getElementById('btn-scrape');const st=document.getElementById('scrape-status');
+  if(b){b.disabled=true;b.textContent='抓取中…';}
+  if(st)st.innerHTML='<span class="msg info"><span class="spinner"></span>已触发抓取…</span>';
+  try{const r=await fetch('/api/scrape',{method:'POST'});const d=await r.json();
+    if(d.status==='already_running'){if(st)st.innerHTML='<span class="msg info">抓取已在执行中</span>';}
+    else if(d.status==='started'){if(st)st.innerHTML='<span class="msg info"><span class="spinner"></span>抓取进行中…</span>';setTimeout(()=>location.reload(),1200);}
+    else {if(st)st.innerHTML='<span class="msg err">'+((d&&d.status)||'触发失败')+'</span>';if(b){b.disabled=false;b.textContent='立即抓取';}}}
+  catch(e){if(st)st.innerHTML='<span class="msg err">请求失败: '+e.message+'</span>';if(b){b.disabled=false;b.textContent='立即抓取';}}}
 async function importCookies(){
   const raw=document.getElementById('cookie-json').value.trim();if(!raw){m('请粘贴 Cookie JSON','err');return}
   let p;try{p=JSON.parse(raw)}catch(e){m('JSON 格式错误: '+e.message,'err');return}
@@ -203,6 +237,7 @@ function m(msg,cls){document.getElementById('import-msg').innerHTML='<span class
 (async function poll(){
   try{const r=await fetch('/api/status');const s=await r.json();
     const db=document.getElementById('badge-daemon');db.textContent=s.daemon_state==='running'?'运行中':'已停止';db.className='badge '+(s.daemon_state==='running'?'on':'off');
+    if(s.login_phase==='failed'&&!document.querySelector('.section.login-failed')){location.reload();return}
     if(s.login_phase==='success'||s.login_phase==='failed'){if('{{.LoginPhase}}'==='running'){location.reload();return}}
     const el=document.querySelector('.ttl');if(el&&s.cookie&&s.cookie.remaining_seconds!==undefined){
       const c=s.cookie.remaining_seconds<=0?'bad':s.cookie.remaining_seconds<3600?'bad':s.cookie.remaining_seconds<86400?'warn':'ok';el.className='ttl '+c;
