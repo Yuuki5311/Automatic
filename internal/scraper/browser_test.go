@@ -14,7 +14,7 @@ func TestBuildGameTabSelector(t *testing.T) {
 	game := config.GameConfig{Name: "原神", URL: "/workbench/recycle/genshin"}
 
 	sel := b.buildGameTabSelector(game)
-	// 必须是合法的CSS选择器列表（逗号分隔），chromedp ByQuery 可解析
+	// 必须是合法的CSS选择器列表（逗号分隔）
 	if !strings.Contains(sel, `[class*="原神"]`) {
 		t.Errorf("selector missing class match: %s", sel)
 	}

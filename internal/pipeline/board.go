@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,13 +12,14 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
+	"github.com/example/jiaoyimao-scraper/internal/feishu"
 	"github.com/example/jiaoyimao-scraper/internal/models"
 	"github.com/example/jiaoyimao-scraper/internal/scraper"
 	"github.com/example/jiaoyimao-scraper/internal/statsstore"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
 
-// BoardRun 看板抓取编排（Cookie → ScrapeBoardAll → 落盘 → 更新 status）。
+// BoardRun 看板抓取编排（Cookie → ScrapeBoardAll → 落盘 → 飞书 → 更新 status）。
 // 由 cmd/scraper 与 Web /api/scrape 共用，避免复制 runScrape。
 type BoardRun struct {
 	Cfg         *config.Config
@@ -26,6 +28,7 @@ type BoardRun struct {
 	PrepCookies func(ctx context.Context) (*models.CookieData, error)
 	Scrape      func(ctx context.Context, cookies *models.CookieData) (models.BoardStatsSnapshot, error)
 	Save        func(dir string, snap models.BoardStatsSnapshot) (string, error)
+	SyncFeishu  func(ctx context.Context, snap models.BoardStatsSnapshot) (newCount, updCount int, err error)
 
 	mu sync.Mutex
 }
@@ -35,7 +38,7 @@ var ErrScrapeRunning = errors.New("scrape already running")
 
 // NewBoardRun 组装真实依赖的看板抓取流程。
 func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth.LoginService, solver captcha.Solver, st *status.Store) *BoardRun {
-	return &BoardRun{
+	r := &BoardRun{
 		Cfg:   cfg,
 		Store: st,
 		NewContext: func(timeoutSec int) (context.Context, context.CancelFunc) {
@@ -60,6 +63,16 @@ func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth
 		},
 		Save: statsstore.Save,
 	}
+	if cfg != nil && cfg.Feishu.AppID != "" && cfg.Feishu.AppSecret != "" &&
+		cfg.Feishu.BitableID != "" && cfg.Feishu.BoardTableID != "" &&
+		!strings.Contains(cfg.Feishu.AppID, "xxxx") {
+		client := feishu.NewClient(&cfg.Feishu)
+		tableID := cfg.Feishu.BoardTableID
+		r.SyncFeishu = func(ctx context.Context, snap models.BoardStatsSnapshot) (int, int, error) {
+			return feishu.NewBitableOps(client, cfg.Feishu.BitableID).SyncBoardStats(ctx, tableID, snap)
+		}
+	}
+	return r
 }
 
 // Run 执行一轮看板抓取。并发第二次调用立即返回 ErrScrapeRunning。
@@ -121,6 +134,15 @@ func (r *BoardRun) Run() error {
 		slog.Error("写入看板统计失败", "component", "pipeline", "error", saveErr, "dir", statsDir)
 		r.Store.RunFinished(saveErr, 0)
 		return nil
+	}
+
+	if r.SyncFeishu != nil {
+		newC, updC, syncErr := r.SyncFeishu(ctx, snap)
+		if syncErr != nil {
+			slog.Error("同步飞书多维表格失败", "component", "pipeline", "error", syncErr)
+		} else {
+			slog.Info("已同步飞书多维表格", "component", "pipeline", "new", newC, "updated", updC)
+		}
 	}
 
 	okGames := 0

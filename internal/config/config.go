@@ -28,8 +28,9 @@ type JYMConfig struct {
 type FeishuConfig struct {
 	AppID        string            `yaml:"app_id"`
 	AppSecret    string            `yaml:"app_secret"`
-	BitableID    string            `yaml:"bitable_id"`
-	TableMapping map[string]string `yaml:"table_mapping"` // 游戏名 → 飞书表格ID
+	BitableID    string            `yaml:"bitable_id"`     // 多维表格 app_token
+	BoardTableID string            `yaml:"board_table_id"` // 看板统计写入的数据表 table_id
+	TableMapping map[string]string `yaml:"table_mapping"`  // 游戏名 → 飞书表格ID（订单方案遗留）
 }
 
 type BrowserConfig struct {

@@ -1,9 +1,6 @@
-// Package browser 提供基于 chromedp 的无头浏览器引擎与页面操作封装。
+// Package browser 提供基于 Rod 的无头浏览器引擎与页面操作封装。
 //
-// 所有浏览器操作均在 headless 模式下执行：不显示窗口、不抢占鼠标，
-// 适合服务器端定时抓取场景。管理器负责浏览器的创建、上下文（标签页）
-// 管理与关闭；动作封装提供导航、点击、输入、提取、截图、Cookie 注入
-// 等可组合的 chromedp.Action。
+// 默认无头运行；不加反检测（不注入 stealth、不伪造 UA / AutomationControlled）。
 package browser
 
 import (
@@ -11,97 +8,155 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
-	"github.com/chromedp/chromedp"
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
 
 	"github.com/example/jiaoyimao-scraper/internal/config"
 )
 
-// Manager 管理一个无头浏览器进程的生命周期与页面上下文。
+type ctxKey int
+
+const (
+	sessionKey ctxKey = iota
+)
+
+// session 绑定到 NewContext 返回的 context，惰性创建 *rod.Page。
+type session struct {
+	mgr  *Manager
+	page *rod.Page
+	mu   sync.Mutex
+}
+
+// Manager 管理一个 Rod 浏览器进程。
 type Manager struct {
-	allocCtx    context.Context
-	allocCancel context.CancelFunc
-	opts        []chromedp.ExecAllocatorOption
+	cfg     *config.BrowserConfig
+	mu      sync.Mutex
+	browser *rod.Browser
+	cleanup func()
 }
 
-// NewManager 初始化浏览器管理器。
-//
-// headless 模式不显示窗口，所有操作在后端执行，不抢占鼠标。
-// 创建管理器并不会立即启动浏览器进程，浏览器会在首次执行动作时惰性启动；
-// 因此即使本机未安装 Chrome，调用本函数也不会报错。
+// NewManager 初始化浏览器管理器（惰性启动，调用时不拉起 Chrome）。
 func NewManager(cfg *config.BrowserConfig) (*Manager, error) {
-	opts := []chromedp.ExecAllocatorOption{
-		chromedp.Flag("headless", cfg.Headless),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		// 设置窗口大小，确保元素可被定位和点击
-		chromedp.WindowSize(1920, 1080),
-		// 禁用自动化检测
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+	if cfg == nil {
+		cfg = &config.BrowserConfig{Headless: true, TimeoutSec: 60}
 	}
-
-	if cfg.ChromePath != "" {
-		opts = append(opts, chromedp.ExecPath(cfg.ChromePath))
-	} else {
-		// 自动查找Chrome路径
-		if path, err := findChrome(); err == nil {
-			opts = append(opts, chromedp.ExecPath(path))
-		}
-	}
-
-	if cfg.DebugPort > 0 {
-		opts = append(opts, chromedp.Flag("remote-debugging-port", fmt.Sprintf("%d", cfg.DebugPort)))
-	}
-
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
-
-	return &Manager{
-		allocCtx:    allocCtx,
-		allocCancel: allocCancel,
-		opts:        opts,
-	}, nil
+	c := *cfg
+	return &Manager{cfg: &c}, nil
 }
 
-// NewContext 创建带超时的浏览器上下文。
-//
-// timeoutSec > 0 时，上下文自带截止时间；首次在该上下文上执行动作时
-// 会惰性启动浏览器进程。timeoutSec 建议不小于浏览器冷启动时间（数秒）。
+// ensureBrowser 启动或返回已启动的 Browser。
+func (m *Manager) ensureBrowser() (*rod.Browser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.browser != nil {
+		return m.browser, nil
+	}
+
+	l := launcher.New().Headless(m.cfg.Headless).Leakless(false)
+	if m.cfg.ChromePath != "" {
+		l = l.Bin(m.cfg.ChromePath)
+	} else if path, err := findChrome(); err == nil {
+		l = l.Bin(path)
+	}
+	if m.cfg.DebugPort > 0 {
+		l = l.RemoteDebuggingPort(m.cfg.DebugPort)
+	}
+	// 基础稳定性参数；不加反检测相关 flag
+	l = l.Set("no-sandbox").Set("disable-gpu").Set("disable-dev-shm-usage")
+
+	url, err := l.Launch()
+	if err != nil {
+		return nil, fmt.Errorf("启动 Chrome 失败: %w", err)
+	}
+	b := rod.New().ControlURL(url)
+	if err := b.Connect(); err != nil {
+		l.Cleanup()
+		return nil, fmt.Errorf("连接 Chrome 失败: %w", err)
+	}
+	m.browser = b
+	m.cleanup = func() {
+		_ = b.Close()
+		l.Cleanup()
+	}
+	return m.browser, nil
+}
+
+// NewContext 创建带可选超时的会话上下文；首次 PageFromContext 时打开标签页。
 func (m *Manager) NewContext(timeoutSec int) (context.Context, context.CancelFunc) {
-	ctx, cancel := chromedp.NewContext(m.allocCtx)
+	base := context.Background()
+	var cancel context.CancelFunc
 	if timeoutSec > 0 {
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		base, cancel = context.WithTimeout(base, time.Duration(timeoutSec)*time.Second)
+	} else {
+		base, cancel = context.WithCancel(base)
 	}
-	return ctx, cancel
+	s := &session{mgr: m}
+	ctx := context.WithValue(base, sessionKey, s)
+	return ctx, func() {
+		s.mu.Lock()
+		p := s.page
+		s.page = nil
+		s.mu.Unlock()
+		if p != nil {
+			_ = p.Close()
+		}
+		cancel()
+	}
 }
 
-// NewTabContext 创建新的浏览器标签页上下文，与既有标签页相互独立，
-// 可并行执行不同页面的操作。取消该上下文只会关闭对应标签页。
+// NewTabContext 与 NewContext 相同（每个会话独立标签页）。
 func (m *Manager) NewTabContext(timeoutSec int) (context.Context, context.CancelFunc) {
 	return m.NewContext(timeoutSec)
 }
 
-// Close 关闭浏览器并释放临时资源。
+// Close 关闭浏览器进程。
 func (m *Manager) Close() error {
-	m.allocCancel()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cleanup != nil {
+		m.cleanup()
+		m.cleanup = nil
+	}
+	m.browser = nil
 	return nil
 }
 
-// findChrome 在Windows上自动查找Chrome安装路径。
-// 优先检查系统级安装目录，再检查用户级安装目录（%LOCALAPPDATA%）。
+// PageFromContext 从 NewContext 会话取出（或惰性创建）页面，并绑定 ctx 超时。
+func PageFromContext(ctx context.Context) (*rod.Page, error) {
+	s, ok := ctx.Value(sessionKey).(*session)
+	if !ok || s == nil {
+		return nil, fmt.Errorf("无效的浏览器上下文：请通过 browser.Manager.NewContext 创建")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.page != nil {
+		return s.page.Context(ctx), nil
+	}
+	b, err := s.mgr.ensureBrowser()
+	if err != nil {
+		return nil, err
+	}
+	page, err := b.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	if err != nil {
+		return nil, fmt.Errorf("打开页面失败: %w", err)
+	}
+	s.page = page
+	return page.Context(ctx), nil
+}
+
 func findChrome() (string, error) {
 	paths := []string{
 		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
 		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 	}
-	// 用户级安装路径（不依赖 C:\Users\Default 模板目录）
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		paths = append(paths, filepath.Join(local, `Google\Chrome\Application\chrome.exe`))
 	}
 	paths = append(paths, `C:\Users\Default\AppData\Local\Google\Chrome\Application\chrome.exe`)
-
 	for _, p := range paths {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil

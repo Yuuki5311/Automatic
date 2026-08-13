@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"time"
@@ -62,6 +63,7 @@ func IsCookieValid(data *models.CookieData) bool {
 
 // ImportFromJSON 从浏览器导出的Cookie JSON（如EditThisCookie格式）导入
 func ImportFromJSON(path string, browserJSON []byte) error {
+	browserJSON = bytes.TrimPrefix(browserJSON, []byte("\xef\xbb\xbf"))
 	var rawCookies []struct {
 		Name     string  `json:"name"`
 		Value    string  `json:"value"`

@@ -56,6 +56,14 @@ func newCaptchaSolver(cfg *config.CaptchaConfig) captcha.Solver {
 
 // ====== 前端可调用的方法 ======
 
+// GetInitStatus 返回初始化状态（浏览器是否就绪）。
+func (a *App) GetInitStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"browser_ready": a.browserMgr != nil,
+		"config_loaded": a.cfg != nil,
+	}
+}
+
 // GetStatus 返回当前状态快照。
 func (a *App) GetStatus() status.Snapshot {
 	return a.store.Snapshot()

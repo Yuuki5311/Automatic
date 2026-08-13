@@ -158,6 +158,11 @@ func (c *Client) BatchInsertRecords(ctx context.Context, tableID string, records
 	return NewBitableOps(c, c.bitableID).BatchInsertOrders(ctx, tableID, records)
 }
 
+// SyncBoardStats 写入看板统计（每个游戏每天一行，自动建字段）。
+func (c *Client) SyncBoardStats(ctx context.Context, tableID string, snap models.BoardStatsSnapshot) (int, int, error) {
+	return NewBitableOps(c, c.bitableID).SyncBoardStats(ctx, tableID, snap)
+}
+
 // doRequest 执行带认证的 API 请求，内置限流与重试。
 // 重试策略：网络错误、HTTP 5xx、限流(99991400)、token失效(99991663，强制刷新后重试)。
 // 注意：POST 类请求在网络失败后重试可能造成服务端重复处理，上层按 OrderID 去重兜底。

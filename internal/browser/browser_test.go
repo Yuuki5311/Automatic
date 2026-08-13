@@ -8,8 +8,6 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/config"
 )
 
-// testManagerConfig 构造一个不会真正启动浏览器的配置（ChromePath 指向不存在的路径，
-// NewManager 只记录配置、不会立即启动浏览器进程，因此可在单测中使用）。
 func testManagerConfig() *config.BrowserConfig {
 	return &config.BrowserConfig{
 		Headless:   true,
@@ -27,14 +25,8 @@ func TestNewManager(t *testing.T) {
 	if m == nil {
 		t.Fatal("NewManager returned nil manager")
 	}
-	if m.allocCtx == nil {
-		t.Error("allocCtx is nil")
-	}
-	if m.allocCancel == nil {
-		t.Error("allocCancel is nil")
-	}
-	if len(m.opts) == 0 {
-		t.Error("expected non-empty exec allocator options")
+	if m.cfg == nil {
+		t.Error("cfg is nil")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
@@ -49,21 +41,14 @@ func TestNewManagerWithDebugPort(t *testing.T) {
 		t.Fatalf("NewManager with DebugPort returned error: %v", err)
 	}
 	defer m.Close()
-	if len(m.opts) == 0 {
-		t.Error("expected non-empty exec allocator options")
-	}
 }
 
 func TestNewManagerAutoFindChrome(t *testing.T) {
-	// ChromePath 为空时应自动查找 Chrome；即使找不到也不应返回错误（浏览器未启动）。
 	m, err := NewManager(&config.BrowserConfig{Headless: true})
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
 	defer m.Close()
-	if len(m.opts) == 0 {
-		t.Error("expected non-empty exec allocator options")
-	}
 }
 
 func TestNewContextTimeout(t *testing.T) {
@@ -73,7 +58,6 @@ func TestNewContextTimeout(t *testing.T) {
 	}
 	defer m.Close()
 
-	// timeoutSec > 0 时应带截止时间
 	ctx, cancel := m.NewContext(30)
 	defer cancel()
 	deadline, ok := ctx.Deadline()
@@ -87,7 +71,6 @@ func TestNewContextTimeout(t *testing.T) {
 		t.Errorf("fresh context should not be canceled, got %v", err)
 	}
 
-	// timeoutSec = 0 时不应带截止时间
 	ctx2, cancel2 := m.NewContext(0)
 	defer cancel2()
 	if _, ok := ctx2.Deadline(); ok {
@@ -114,17 +97,22 @@ func TestNewTabContextIsIndependentContext(t *testing.T) {
 		t.Error("expected a deadline on NewTabContext when timeoutSec=30")
 	}
 
-	// 取消其中一个不应影响另一个
 	cancel1()
 	if ctx2.Err() != nil {
 		t.Error("cancelling the first context must not cancel the tab context")
 	}
 }
 
+func TestPageFromContextInvalid(t *testing.T) {
+	_, err := PageFromContext(t.Context())
+	if err == nil {
+		t.Fatal("expected error for plain context")
+	}
+}
+
 func TestFindChrome(t *testing.T) {
 	path, err := findChrome()
 	if err != nil {
-		// 机器上没有安装 Chrome 不算失败，只是跳过校验
 		t.Skipf("Chrome not found, skipping: %v", err)
 	}
 	if path == "" {

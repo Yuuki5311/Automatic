@@ -13,21 +13,22 @@ jiaoyimao:
 feishu:
   app_id: "cli_xxxxxxxxxxxx"        # TODO: 替换为飞书应用 App ID
   app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxx"  # TODO: 替换为飞书应用 App Secret
-  bitable_id: "tblXXXXXXXXXXXXXXXX" # TODO: 替换为多维表格 ID
-  table_mapping:
+  bitable_id: "GzGfb0UECaWsjPsiEgScFnqqnQn"  # 多维表格 app_token
+  board_table_id: "tbl9GnWtSkuMzIoV"         # 看板统计数据表 table_id
+  table_mapping:                            # 订单方案遗留（本阶段看板不使用）
     "火影忍者": "tblXXXXXXX1"
-    "原神_table1": "tblXXXXXXX2"        # 原神-官服
-    "原神_table2": "tblXXXXXXX3"        # 原神-渠道服/B服
+    "原神_table1": "tblXXXXXXX2"
+    "原神_table2": "tblXXXXXXX3"
     "绝区零": "tblXXXXXXX4"
-    "崩坏：星穹铁道_table1": "tblXXXXXXX5"  # 星铁-官服
-    "崩坏：星穹铁道_table2": "tblXXXXXXX6"  # 星铁-渠道服
+    "崩坏：星穹铁道_table1": "tblXXXXXXX5"
+    "崩坏：星穹铁道_table2": "tblXXXXXXX6"
     "鸣潮": "tblXXXXXXX7"
     "三角洲行动": "tblXXXXXXX8"
 
 browser:
-  headless: true           # 无头模式，不显示浏览器窗口
+  headless: true           # Rod 无头浏览器；不加反检测
   chrome_path: ""          # 留空则自动查找系统 Chrome
-  timeout_sec: 60
+  timeout_sec: 120
   debug_port: 9222
 
 scraper:

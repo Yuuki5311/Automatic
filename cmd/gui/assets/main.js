@@ -114,10 +114,29 @@ async function runScrape() {
   setTimeout(() => { btn.disabled = false; msg.textContent = ''; }, 3000);
 }
 
+async function checkInit() {
+  const a = api(); if (!a) return;
+  try {
+    const s = await a.GetInitStatus();
+    const cs = document.getElementById('conn-status');
+    if (cs) { cs.textContent = '✅ Go 服务已连接 · 浏览器'+(s.browser_ready?'就绪':'未就绪'); cs.style.background='#dcfce7'; cs.style.color='#166534'; }
+    if (!s.browser_ready) {
+      document.getElementById('badge-daemon').textContent = '浏览器未初始化';
+      document.getElementById('badge-daemon').className = 'badge err';
+      document.getElementById('login-status').innerHTML = '<span class="msg err">❌ Chrome 未找到，请安装 Chrome 浏览器</span>';
+      document.getElementById('btn-login').disabled = true;
+      document.getElementById('btn-scrape').disabled = true;
+    }
+  } catch(e) {
+    const cs = document.getElementById('conn-status');
+    if (cs) { cs.textContent = '❌ Go 服务连接失败: '+e.message; cs.style.background='#fef2f2'; cs.style.color='#991b1b'; }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   let tries = 0;
   const check = setInterval(() => {
-    if (window.go && window.go.services && window.go.services.App) { clearInterval(check); refresh(); }
-    if (++tries > 100) clearInterval(check);
+    if (window.go && window.go.services && window.go.services.App) { clearInterval(check); checkInit(); refresh(); }
+    if (++tries > 100) { clearInterval(check); document.body.innerHTML += '<div style="color:red;padding:20px">Go 服务未连接，请重启应用</div>'; }
   }, 200);
 });
