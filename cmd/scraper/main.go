@@ -1,8 +1,8 @@
-// Command scraper 是交易猫回收订单抓取服务的主程序入口。
+// Command scraper 是交易猫看板统计抓取服务的主程序入口。
 //
 // 支持三种运行方式：
-//   - 默认 / -once：执行一次完整的抓取流程后退出；
-//   - -daemon：常驻进程，启动时立即执行一次，之后按 config 中 scraper.cron_expr 定时执行。
+//   - 默认 / -once：执行一次看板抓取并写入本地 JSON 后退出；
+//   - -daemon：常驻进程，仅按 config 中 scraper.cron_expr 定时执行（启动时不立即抓取）。
 //   - -web：启用 Web 状态仪表盘（默认 http://127.0.0.1:8080）
 //
 // 所有浏览器操作均在 headless 模式下执行，不抢占鼠标。
@@ -24,10 +24,10 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
-	"github.com/example/jiaoyimao-scraper/internal/feishu"
 	"github.com/example/jiaoyimao-scraper/internal/logger"
 	"github.com/example/jiaoyimao-scraper/internal/models"
 	"github.com/example/jiaoyimao-scraper/internal/scraper"
+	"github.com/example/jiaoyimao-scraper/internal/statsstore"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 	"github.com/example/jiaoyimao-scraper/internal/web"
 )
@@ -133,45 +133,30 @@ func main() {
 			st.RecordGame(tableKey, count, reportErr)
 		})
 
-		// 抓取所有游戏数据
-		allOrders, err := scraperMgr.ScrapeAll(ctx)
+		snap, err := scraperMgr.ScrapeBoardAll(ctx)
 		if err != nil {
 			slog.Error("抓取数据失败", "component", "main", "error", err)
 			st.RunFinished(err, 0)
 			return
 		}
 
-		st.SetPhase(status.PhaseSyncing)
-
-		// 写入飞书多维表格
-		feishuClient := feishu.NewClient(&cfg.Feishu)
-		totalOrders := 0
-		syncErrCount := 0
-		for tableKey, orders := range allOrders {
-			tableID, ok := cfg.Feishu.TableMapping[tableKey]
-			if !ok {
-				slog.Warn("未找到表格映射，跳过", "component", "main", "table", tableKey)
-				continue
-			}
-
-			bitable := feishu.NewBitableOps(feishuClient, cfg.Feishu.BitableID)
-			newC, updC, syncErr := bitable.BatchInsertOrders(ctx, tableID, orders)
-			if syncErr != nil {
-				slog.Error("写入飞书表格失败", "component", "main", "table", tableKey, "error", syncErr)
-				syncErrCount++
-			}
-			st.RecordGameSync(tableKey, status.FeishuSyncResult{NewCount: newC, UpdCount: updC, Err: syncErr})
-			totalOrders += len(orders)
+		path, saveErr := statsstore.Save(cfg.Scraper.StatsDir, snap)
+		if saveErr != nil {
+			slog.Error("写入看板统计失败", "component", "main", "error", saveErr, "dir", cfg.Scraper.StatsDir)
+			st.RunFinished(saveErr, 0)
+			return
 		}
 
-		var runErr error
-		if syncErrCount > 0 {
-			runErr = fmt.Errorf("%d 个飞书表格同步失败", syncErrCount)
+		okGames := 0
+		for _, g := range snap.Games {
+			if g.Error == "" {
+				okGames++
+			}
 		}
-		st.RunFinished(runErr, totalOrders)
+		st.RunFinished(nil, okGames)
 
 		elapsed := time.Since(startTime)
-		slog.Info("========== 抓取完成 ==========", "component", "main", "duration", elapsed.String())
+		slog.Info("========== 抓取完成 ==========", "component", "main", "duration", elapsed.String(), "path", path, "games", okGames)
 	}
 
 	// 8. 执行模式分支
@@ -189,8 +174,6 @@ func main() {
 			slog.Error("无效的定时表达式", "component", "main", "expr", cfg.Scraper.CronExpr, "error", err)
 			os.Exit(1)
 		}
-
-		go runScrape()
 
 		c.Start()
 		slog.Info("守护进程已启动", "component", "main", "cron", cfg.Scraper.CronExpr)

@@ -2,20 +2,19 @@ package scraper
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/models"
 )
 
-// testAPIServer 模拟交易猫内部API。
-// 记录收到的请求参数，便于断言API模式确实按预期调用。
+const mtopStatsPath = "/h5/mtop.com.jym.merchant.board.recyclestats/1.0/"
+
+// testAPIServer 模拟 MTOP recyclestats，记录请求便于断言。
 type testAPIServer struct {
 	srv      *httptest.Server
 	mu       sync.Mutex
@@ -60,47 +59,40 @@ func (s *testAPIServer) hasRequest(method, path string) bool {
 	return false
 }
 
-// writeOrdersResponse 输出带非RFC3339时间格式的订单列表，验证宽松解析。
-func writeOrdersResponse(w http.ResponseWriter, orders []map[string]interface{}) {
-	payload := map[string]interface{}{
-		"code":    0,
-		"message": "ok",
-		"data": map[string]interface{}{
-			"total": len(orders),
-			"list":  orders,
-		},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(payload)
+func useTestMTOP(t *testing.T, srvURL string) {
+	t.Helper()
+	orig := mtopBaseURL
+	mtopBaseURL = srvURL
+	t.Cleanup(func() { mtopBaseURL = orig })
 }
 
-// newTestManager 构造测试用 Manager（浏览器管理器传 nil，
-// 浏览器模式调用会返回明确错误，便于断言兜底路由）。
+func testMTOPCookies() *models.CookieData {
+	return &models.CookieData{Cookies: []models.CookieEntry{
+		{Name: "_m_h5_tk", Value: "abc_123", Domain: ".jiaoyimao.com", Path: "/"},
+		{Name: "token", Value: "secret", Domain: ".jiaoyimao.com", Path: "/"},
+	}}
+}
+
+func writeMTOPSuccess(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ret":["SUCCESS::调用成功"],"data":{"result":[{"title":"咨询量","staData":"10","properties":{"tips":"t"}}]}}`))
+}
+
+func writeMTOPSessionExpired(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ret":["FAIL_SYS_SESSION_EXPIRED::x"],"data":{}}`))
+}
+
 func newTestManager(cfg *config.Config, cookies *models.CookieData) *Manager {
 	return NewManager(cfg, nil, cookies)
 }
 
-func sampleOrderJSON(game string) map[string]interface{} {
-	return map[string]interface{}{
-		"order_id":      "NO-" + game,
-		"game_name":     game,
-		"server_region": "官服",
-		"account_info":  "账号" + game,
-		"price":         199.5,
-		"status":        "回收中",
-		"create_time":   "2026-08-12 10:30:00",
-	}
-}
-
 func TestScrapeGameTable_APIModeSuccess(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON("原神")})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM: config.JYMConfig{BaseURL: srv.srv.URL},
@@ -109,64 +101,51 @@ func TestScrapeGameTable_APIModeSuccess(t *testing.T) {
 			Games: []config.GameConfig{{Name: "原神", TableCount: 1}},
 		},
 	}
-	cookies := &models.CookieData{Cookies: []models.CookieEntry{
-		{Name: "token", Value: "secret", Domain: ".jiaoyimao.com", Path: "/"},
-	}}
+	cookies := testMTOPCookies()
 	m := newTestManager(cfg, cookies)
 
 	orders, err := m.ScrapeGameTable(context.Background(), cfg.Scraper.Games[0], 0)
 	if err != nil {
 		t.Fatalf("ScrapeGameTable(api mode) failed: %v", err)
 	}
-	if len(orders) != 1 || orders[0].OrderID != "NO-原神" {
-		t.Fatalf("unexpected orders: %+v", orders)
+	// 订单列表 API 已停用：FetchRecycleOrders 在看板成功后返回空列表。
+	if len(orders) != 0 {
+		t.Fatalf("deprecated order fetch should return empty, got %+v", orders)
 	}
-	// 时间字段应被宽松解析
-	if !orders[0].CreateTime.Equal(time.Date(2026, 8, 12, 10, 30, 0, 0, time.UTC)) {
-		t.Errorf("CreateTime = %v, want 2026-08-12 10:30:00", orders[0].CreateTime)
+	if !srv.hasRequest(http.MethodGet, mtopStatsPath) {
+		t.Fatal("GET recyclestats was never called")
 	}
-
-	// API调用参数断言：game/page/pageSize/table + Cookie 透传
-	// （跳过 ProbeAPI 的轻量探测请求，pageSize=1 为探测、500 为业务请求）
 	var got *testAPIRequest
-	for _, r := range srv.requests {
-		if r.method == http.MethodGet && r.path == "/api/v1/merchant/recycle/orders" && len(r.query["pageSize"]) > 0 && r.query["pageSize"][0] == "500" {
-			got = &r
+	for i := range srv.requests {
+		r := &srv.requests[i]
+		if r.method == http.MethodGet && r.path == mtopStatsPath {
+			got = r
 			break
 		}
 	}
-	if got == nil {
-		t.Fatal("GET /api/v1/merchant/recycle/orders was never called")
-	}
-	if got.query["game"][0] != "原神" || got.query["page"][0] != "1" || got.query["pageSize"][0] != "500" {
-		t.Errorf("unexpected query params: %+v", got.query)
-	}
 	tokenFound := false
 	for _, c := range got.cookies {
-		if c.Name == "token" && c.Value == "secret" {
+		if c.Name == "_m_h5_tk" && c.Value == "abc_123" {
 			tokenFound = true
 		}
 	}
 	if !tokenFound {
-		t.Error("token cookie was not forwarded to API")
+		t.Error("_m_h5_tk cookie was not forwarded to MTOP")
 	}
 }
 
 func TestScrapeGameTable_APIModeExpiredCookie(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusUnauthorized)
+		writeMTOPSessionExpired(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
 		Scraper: config.ScraperConfig{Mode: "api"},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	_, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
 	if err == nil {
@@ -179,21 +158,16 @@ func TestScrapeGameTable_APIModeExpiredCookie(t *testing.T) {
 
 func TestScrapeGameTable_AutoModeAPIFailureFallsBackToBrowser(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if len(r.URL.Query()["pageSize"]) > 0 && r.URL.Query()["pageSize"][0] == "1" {
-			w.WriteHeader(http.StatusOK) // ProbeAPI 探测通过
-			return
-		}
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
 		Scraper: config.ScraperConfig{Mode: "auto"},
 	}
-	// browserMgr 为 nil → 浏览器兜底路径应返回明确错误，
-	// 证明流程确实路由到了浏览器模式而不是静默返回空数据。
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	_, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
 	if err == nil {
@@ -205,46 +179,38 @@ func TestScrapeGameTable_AutoModeAPIFailureFallsBackToBrowser(t *testing.T) {
 }
 
 func TestScrapeGameTable_AutoModeAPISuccessNoBrowser(t *testing.T) {
+	// 看板 FetchRecycleOrders 成功后仍返回空订单，auto 会落入浏览器兜底。
+	// 此测试改为验证 api 模式在 MTOP 成功时不走浏览器。
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON("原神")})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
-		Scraper: config.ScraperConfig{Mode: "auto"},
+		Scraper: config.ScraperConfig{Mode: "api"},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
-	orders, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
+	_, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
 	if err != nil {
-		t.Fatalf("auto mode should succeed via API: %v", err)
-	}
-	if len(orders) != 1 {
-		t.Fatalf("got %d orders, want 1", len(orders))
+		t.Fatalf("api mode should succeed via MTOP without browser: %v", err)
 	}
 }
 
 func TestScrapeGameTable_AutoModeEmptyListFallsBackToBrowser(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		// 空列表：API成功但无数据，也应切换到浏览器兜底
-		writeOrdersResponse(w, nil)
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
 		Scraper: config.ScraperConfig{Mode: "auto"},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	_, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
 	if err == nil || !strings.Contains(err.Error(), "浏览器") {
@@ -254,90 +220,60 @@ func TestScrapeGameTable_AutoModeEmptyListFallsBackToBrowser(t *testing.T) {
 
 func TestScrapeGameTable_AutoModeProbeFailureFallsBackToBrowser(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable) // 探测与业务接口均503
+		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
 		Scraper: config.ScraperConfig{Mode: "auto"},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	_, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
 	if err == nil || !strings.Contains(err.Error(), "浏览器") {
 		t.Fatalf("probe failure should fall back to browser, got err: %v", err)
 	}
-	// ProbeAPI 现在对实际订单端点发 GET（pageSize=1），而非 HEAD /api/
-	if !srv.hasRequest(http.MethodGet, "/api/v1/merchant/recycle/orders") {
-		t.Fatal("ProbeAPI GET request to orders endpoint was not sent")
+	if !srv.hasRequest(http.MethodGet, mtopStatsPath) {
+		t.Fatal("ProbeAPI GET request to recyclestats was not sent")
 	}
 }
 
-// TestScrapeGameTable_AutoModeAuthErrorRefreshesAndRetries 验证会话失效（401）时：
-// 先重新登录刷新Cookie → 用新Cookie重试API一次 → 成功后不再落入浏览器兜底。
 func TestScrapeGameTable_AutoModeAuthErrorRefreshesAndRetries(t *testing.T) {
 	var fetchCalls int
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if len(r.URL.Query()["pageSize"]) > 0 && r.URL.Query()["pageSize"][0] == "1" {
-			w.WriteHeader(http.StatusOK) // ProbeAPI 探测通过
-			return
-		}
 		fetchCalls++
-		if fetchCalls == 1 {
-			w.WriteHeader(http.StatusUnauthorized) // 首次业务请求Cookie过期
+		// ProbeAPI 只看 HTTP 状态；业务解析在 FetchBoardStats。
+		// 第 1 轮：探测 200 + 业务 SESSION；刷新后第 2 轮成功但仍返回空订单 → 浏览器兜底。
+		if fetchCalls <= 2 {
+			writeMTOPSessionExpired(w)
 			return
 		}
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON("原神")})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
 		Scraper: config.ScraperConfig{Mode: "auto"},
 	}
-	// browserMgr 为 nil：若刷新后API仍失败，浏览器兜底会返回明确错误
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	refreshes := 0
 	m.SetSessionRefresher(func(ctx context.Context) (*models.CookieData, error) {
 		refreshes++
-		return &models.CookieData{Cookies: []models.CookieEntry{
-			{Name: "token", Value: "fresh", Domain: ".jiaoyimao.com", Path: "/"},
-		}}, nil
+		return testMTOPCookies(), nil
 	})
 
-	orders, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
-	if err != nil {
-		t.Fatalf("auto mode should refresh and retry successfully: %v", err)
-	}
+	_, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0)
 	if refreshes != 1 {
 		t.Fatalf("expected exactly 1 refresh, got %d", refreshes)
 	}
-	if len(orders) != 1 || orders[0].OrderID != "NO-原神" {
-		t.Fatalf("unexpected orders: %+v", orders)
-	}
-	// 重试请求应携带刷新后的Cookie（requests 按时间序追加，取最后一个业务请求）
-	var got *testAPIRequest
-	for i := len(srv.requests) - 1; i >= 0; i-- {
-		r := srv.requests[i]
-		if r.method == http.MethodGet && r.path == "/api/v1/merchant/recycle/orders" &&
-			len(r.query["pageSize"]) > 0 && r.query["pageSize"][0] == "500" {
-			got = &r
-			break
-		}
-	}
-	if got == nil {
-		t.Fatal("retried API request was never sent")
-	}
-	freshFound := false
-	for _, c := range got.cookies {
-		if c.Name == "token" && c.Value == "fresh" {
-			freshFound = true
-		}
-	}
-	if !freshFound {
-		t.Error("retried API request should carry the refreshed cookie")
+	// 订单列表已停用：刷新后 API 仍返回空列表，auto 落入浏览器。
+	if err == nil || !strings.Contains(err.Error(), "浏览器") {
+		t.Fatalf("after refresh, empty orders should fall back to browser, got: %v", err)
 	}
 }
 
@@ -368,38 +304,29 @@ func TestScrapeGameTable_UnknownMode(t *testing.T) {
 
 func TestScrapeGameTable_EmptyModeDefaultsToAuto(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON("原神")})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
-		Scraper: config.ScraperConfig{Mode: ""}, // 未配置时按 auto 处理
+		Scraper: config.ScraperConfig{Mode: ""},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
-	if _, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0); err != nil {
-		t.Fatalf("empty mode should default to auto and succeed: %v", err)
+	// 空 mode 按 auto：MTOP 成功但订单为空 → 浏览器兜底（区别于 api 模式不报错）。
+	if _, err := m.ScrapeGameTable(context.Background(), config.GameConfig{Name: "原神"}, 0); err == nil || !strings.Contains(err.Error(), "浏览器") {
+		t.Fatal("empty mode should default to auto and fall back to browser on empty orders")
 	}
 }
 
 func TestScrapeGame_MergesAllTables(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		game := r.URL.Query().Get("game")
-		table := r.URL.Query().Get("table")
-		order := sampleOrderJSON(game)
-		order["order_id"] = game + "-table" + table
-		writeOrdersResponse(w, []map[string]interface{}{order})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM: config.JYMConfig{BaseURL: srv.srv.URL},
@@ -408,39 +335,36 @@ func TestScrapeGame_MergesAllTables(t *testing.T) {
 			Games: []config.GameConfig{{Name: "原神", TableCount: 2}},
 		},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	orders, err := m.ScrapeGame(context.Background(), cfg.Scraper.Games[0])
 	if err != nil {
 		t.Fatalf("ScrapeGame failed: %v", err)
 	}
-	if len(orders) != 2 {
-		t.Fatalf("got %d orders, want 2 (one per table)", len(orders))
-	}
-	if orders[0].OrderID != "原神-table0" || orders[1].OrderID != "原神-table1" {
-		t.Errorf("orders not merged in table order: %+v", orders)
+	if len(orders) != 0 {
+		t.Fatalf("deprecated order fetch should return empty, got %d", len(orders))
 	}
 }
 
 func TestScrapeGame_TableFailureReturnsError(t *testing.T) {
+	var n int
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
+		n++
+		// 每表 ProbeAPI + FetchBoardStats；第 2 表从第 3 次请求起失败。
+		if n >= 3 {
+			writeMTOPSessionExpired(w)
 			return
 		}
-		if r.URL.Query().Get("table") == "1" {
-			w.WriteHeader(http.StatusUnauthorized) // 第二个表格Cookie过期
-			return
-		}
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON("原神")})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM:     config.JYMConfig{BaseURL: srv.srv.URL},
 		Scraper: config.ScraperConfig{Mode: "api"},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	if _, err := m.ScrapeGame(context.Background(), config.GameConfig{Name: "原神", TableCount: 2}); err == nil {
 		t.Fatal("ScrapeGame should return error when a table fails")
@@ -449,14 +373,10 @@ func TestScrapeGame_TableFailureReturnsError(t *testing.T) {
 
 func TestScrapeAll_TableKeys(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		game := r.URL.Query().Get("game")
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON(game)})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM: config.JYMConfig{BaseURL: srv.srv.URL},
@@ -468,7 +388,7 @@ func TestScrapeAll_TableKeys(t *testing.T) {
 			},
 		},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
 	result, err := m.ScrapeAll(context.Background())
 	if err != nil {
@@ -482,7 +402,6 @@ func TestScrapeAll_TableKeys(t *testing.T) {
 			t.Errorf("missing table key %q, got %+v", key, result)
 		}
 	}
-	// 单表格游戏不附加_table后缀
 	if _, ok := result["火影忍者_table1"]; ok {
 		t.Error("single-table game should not have _table1 key")
 	}
@@ -490,18 +409,15 @@ func TestScrapeAll_TableKeys(t *testing.T) {
 
 func TestScrapeAll_ContinuesAfterTableFailure(t *testing.T) {
 	srv := newTestAPIServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
+		data := r.URL.Query().Get("data")
+		if strings.Contains(data, "1013597") { // 绝区零
+			writeMTOPSessionExpired(w)
 			return
 		}
-		game := r.URL.Query().Get("game")
-		if game == "绝区零" {
-			w.WriteHeader(http.StatusUnauthorized) // 该游戏Cookie过期
-			return
-		}
-		writeOrdersResponse(w, []map[string]interface{}{sampleOrderJSON(game)})
+		writeMTOPSuccess(w)
 	})
 	defer srv.Close()
+	useTestMTOP(t, srv.srv.URL)
 
 	cfg := &config.Config{
 		JYM: config.JYMConfig{BaseURL: srv.srv.URL},
@@ -513,9 +429,8 @@ func TestScrapeAll_ContinuesAfterTableFailure(t *testing.T) {
 			},
 		},
 	}
-	m := newTestManager(cfg, &models.CookieData{})
+	m := newTestManager(cfg, testMTOPCookies())
 
-	// 失败的游戏应被跳过，其余游戏正常返回，且整体不报错
 	result, err := m.ScrapeAll(context.Background())
 	if err != nil {
 		t.Fatalf("ScrapeAll should not fail when a single table fails: %v", err)
@@ -523,13 +438,12 @@ func TestScrapeAll_ContinuesAfterTableFailure(t *testing.T) {
 	if _, ok := result["绝区零"]; ok {
 		t.Error("failed table should not be in result")
 	}
-	if len(result["鸣潮"]) != 1 {
-		t.Errorf("鸣潮 should have 1 order, got %d", len(result["鸣潮"]))
+	if _, ok := result["鸣潮"]; !ok {
+		t.Error("鸣潮 should be present after sibling table failure")
 	}
 }
 
 func TestNewManager_NilInputs(t *testing.T) {
-	// 所有入参为 nil 不应 panic
 	m := NewManager(nil, nil, nil)
 	if m == nil {
 		t.Fatal("NewManager(nil,nil,nil) returned nil manager")

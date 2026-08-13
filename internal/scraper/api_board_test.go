@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,6 +53,9 @@ func TestParseRecycleStatsJSON_FailRet(t *testing.T) {
 	_, err := ParseRecycleStatsJSON("火影忍者", 1003132, []byte(`{"ret":["FAIL_SYS_SESSION_EXPIRED::x"],"data":{}}`))
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errCookieExpired) {
+		t.Fatalf("session FAIL should map to errCookieExpired, got %v", err)
 	}
 }
 

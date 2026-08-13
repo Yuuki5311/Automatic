@@ -5,11 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/models"
 )
+
+type boardFetcher interface {
+	FetchBoardStats(ctx context.Context, gameName string) (models.GameBoardStats, error)
+}
 
 var errLoginWall = errors.New("页面跳转到登录页，会话已失效")
 
@@ -22,6 +27,7 @@ type Manager struct {
 	cfg       *config.Config
 	cookies   *models.CookieData
 	apiClient *apiClient
+	fetcher   boardFetcher
 	browserS  *browserScraper
 	refresh   sessionRefresher
 	report    resultReporter
@@ -39,6 +45,7 @@ func NewManager(cfg *config.Config, browserMgr *browser.Manager, cookies *models
 	}
 	if cfg != nil {
 		m.apiClient = newAPIClient(cfg.JYM.BaseURL, cookieEntries)
+		m.fetcher = m.apiClient
 	}
 	m.browserS = newBrowserScraper(cfg, browserMgr, cookieEntries)
 	return m
@@ -73,6 +80,54 @@ func (m *Manager) tryRefresh(ctx context.Context) bool {
 
 func (m *Manager) isSessionExpired(err error) bool {
 	return errors.Is(err, errCookieExpired) || errors.Is(err, errLoginWall)
+}
+
+func (m *Manager) board() boardFetcher {
+	if m.fetcher != nil {
+		return m.fetcher
+	}
+	return m.apiClient
+}
+
+// YesterdayDate 返回 now 所在本地时区的昨日日期（YYYY-MM-DD），与看板 time=yesterday 对齐。
+func YesterdayDate(now time.Time) string {
+	return now.In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+func (m *Manager) ScrapeBoardAll(ctx context.Context) (models.BoardStatsSnapshot, error) {
+	if m.cfg == nil {
+		return models.BoardStatsSnapshot{}, fmt.Errorf("配置为空，无法抓取")
+	}
+	snap := models.BoardStatsSnapshot{Date: YesterdayDate(time.Now()), ScrapedAt: time.Now()}
+	fetcher := m.board()
+	if fetcher == nil {
+		return snap, fmt.Errorf("API客户端未初始化（配置缺失）")
+	}
+
+	ok := 0
+	for _, game := range m.cfg.Scraper.Games {
+		gs, err := fetcher.FetchBoardStats(ctx, game.Name)
+		if err != nil && m.isSessionExpired(err) && m.tryRefresh(ctx) {
+			slog.Info("看板会话失效，已重新登录，重试", "component", "scraper", "game", game.Name)
+			gs, err = fetcher.FetchBoardStats(ctx, game.Name)
+		}
+		if err != nil {
+			gs = models.GameBoardStats{GameName: game.Name, TimeKey: "yesterday", Error: err.Error(), FetchedAt: time.Now()}
+			if id, okID := gameNameToID[game.Name]; okID {
+				gs.GameID = id
+			}
+		} else {
+			ok++
+		}
+		snap.Games = append(snap.Games, gs)
+		if m.report != nil {
+			m.report(game.Name, len(gs.Metrics), err)
+		}
+	}
+	if ok == 0 {
+		return snap, fmt.Errorf("全部游戏看板抓取失败")
+	}
+	return snap, nil
 }
 
 func (m *Manager) ScrapeAll(ctx context.Context) (map[string][]models.RecycleOrder, error) {

@@ -34,12 +34,12 @@ const (
 
 // gameNameToID 游戏名 → MTOP gameId 映射
 var gameNameToID = map[string]int{
-	"火影忍者":   gameIDNaruto,
-	"原神":     gameIDGenshin,
-	"绝区零":    gameIDZZZ,
+	"火影忍者":    gameIDNaruto,
+	"原神":      gameIDGenshin,
+	"绝区零":     gameIDZZZ,
 	"崩坏：星穹铁道": gameIDHSR,
-	"鸣潮":     gameIDWuthering,
-	"三角洲行动":  gameIDDelta,
+	"鸣潮":      gameIDWuthering,
+	"三角洲行动":   gameIDDelta,
 }
 
 type apiClient struct {
@@ -156,6 +156,9 @@ func ParseRecycleStatsJSON(gameName string, gameID int, body []byte) (models.Gam
 		msg := "未知错误"
 		if len(mtopResp.Ret) > 0 {
 			msg = mtopResp.Ret[0]
+		}
+		if strings.Contains(msg, "SESSION") {
+			return models.GameBoardStats{}, fmt.Errorf("%w: %s", errCookieExpired, msg)
 		}
 		return models.GameBoardStats{}, fmt.Errorf("API错误: %s", msg)
 	}
