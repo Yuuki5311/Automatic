@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/models"
 )
@@ -95,6 +96,72 @@ func TestRunFinishedPreservesStatsDateAndSuccessCount(t *testing.T) {
 	}
 	if m["stats_date"] != "2026-08-12" {
 		t.Fatalf("json stats_date=%v", m["stats_date"])
+	}
+}
+
+func TestSetAccountsAppearsInSnapshot(t *testing.T) {
+	s := NewStore()
+	runAt := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	s.SetAccounts([]AccountStatus{
+		{
+			ID:          "acc-1",
+			Username:    "13800000000",
+			Enabled:     true,
+			LastStatus:  "ok",
+			LastRunAt:   runAt,
+			CookieValid: true,
+			HasPassword: true,
+		},
+		{
+			ID:          "acc-2",
+			Username:    "13900000000",
+			Enabled:     false,
+			LastStatus:  "skipped",
+			LastError:   "login failed",
+			CookieValid: false,
+			HasPassword: false,
+		},
+	})
+
+	snap := s.Snapshot()
+	if len(snap.Accounts) != 2 {
+		t.Fatalf("accounts=%d, want 2", len(snap.Accounts))
+	}
+	if snap.Accounts[0].Username != "13800000000" || !snap.Accounts[0].CookieValid {
+		t.Fatalf("account[0]: %+v", snap.Accounts[0])
+	}
+	if snap.Accounts[1].LastError != "login failed" {
+		t.Fatalf("account[1] LastError=%q", snap.Accounts[1].LastError)
+	}
+
+	snap.Accounts[0].Username = "mutated"
+	snap2 := s.Snapshot()
+	if snap2.Accounts[0].Username != "13800000000" {
+		t.Fatalf("Snapshot should deep-copy accounts, got Username=%q", snap2.Accounts[0].Username)
+	}
+
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	accounts, ok := m["accounts"].([]any)
+	if !ok || len(accounts) != 2 {
+		t.Fatalf("json accounts=%v", m["accounts"])
+	}
+}
+
+func TestSetAccountsNilClearsList(t *testing.T) {
+	s := NewStore()
+	s.SetAccounts([]AccountStatus{{ID: "acc-1", Username: "13800000000"}})
+	s.SetAccounts(nil)
+
+	snap := s.Snapshot()
+	if snap.Accounts != nil {
+		t.Fatalf("accounts=%v, want nil", snap.Accounts)
 	}
 }
 

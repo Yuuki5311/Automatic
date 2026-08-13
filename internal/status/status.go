@@ -25,17 +25,30 @@ const (
 	PhaseSyncing  Phase = "syncing"
 )
 
+// AccountStatus 单账号运行与 Cookie 状态（供 UI 轮询）。
+type AccountStatus struct {
+	ID          string    `json:"id"`
+	Username    string    `json:"username"`
+	Enabled     bool      `json:"enabled"`
+	LastStatus  string    `json:"last_status"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastRunAt   time.Time `json:"last_run_at,omitempty"`
+	CookieValid bool      `json:"cookie_valid"`
+	HasPassword bool      `json:"has_password"`
+}
+
 // Snapshot 状态快照（JSON 序列化给前端）。
 type Snapshot struct {
-	DaemonState DaemonState  `json:"daemon_state"`
-	Phase       Phase        `json:"phase"`
-	LoginPhase  LoginPhase   `json:"login_phase"` // 独立登录进度（与抓取 phase 解耦）
-	LoginError  string       `json:"login_error,omitempty"`
-	Cookie      CookieInfo   `json:"cookie"`
-	CurrentRun  *RunInfo     `json:"current_run,omitempty"`
-	LastRun     *RunInfo     `json:"last_run,omitempty"`
-	Games       []GameResult `json:"games"`
-	ServerTime  time.Time    `json:"server_time"`
+	DaemonState DaemonState     `json:"daemon_state"`
+	Phase       Phase           `json:"phase"`
+	LoginPhase  LoginPhase      `json:"login_phase"` // 独立登录进度（与抓取 phase 解耦）
+	LoginError  string          `json:"login_error,omitempty"`
+	Cookie      CookieInfo      `json:"cookie"`
+	CurrentRun  *RunInfo        `json:"current_run,omitempty"`
+	LastRun     *RunInfo        `json:"last_run,omitempty"`
+	Games       []GameResult    `json:"games"`
+	Accounts    []AccountStatus `json:"accounts,omitempty"`
+	ServerTime  time.Time       `json:"server_time"`
 }
 
 // LoginPhase UI 触发的登录进度。
@@ -224,6 +237,19 @@ func (s *Store) RecordGameStats(gameName string, metrics []models.BoardMetric, e
 	s.snap.Games = append(s.snap.Games, gr)
 }
 
+// SetAccounts 更新账号列表快照（由 pipeline/web 刷新写入）。
+func (s *Store) SetAccounts(list []AccountStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if list == nil {
+		s.snap.Accounts = nil
+		return
+	}
+	accounts := make([]AccountStatus, len(list))
+	copy(accounts, list)
+	s.snap.Accounts = accounts
+}
+
 // RecordGameSync 更新某张表的飞书写入结果（按 tableKey 匹配）。
 func (s *Store) RecordGameSync(tableKey string, result FeishuSyncResult) {
 	s.mu.Lock()
@@ -261,6 +287,11 @@ func (s *Store) Snapshot() Snapshot {
 	if snap.LastRun != nil {
 		lr := *snap.LastRun
 		snap.LastRun = &lr
+	}
+	if snap.Accounts != nil {
+		accounts := make([]AccountStatus, len(snap.Accounts))
+		copy(accounts, snap.Accounts)
+		snap.Accounts = accounts
 	}
 	return snap
 }
