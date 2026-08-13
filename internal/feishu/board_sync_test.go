@@ -43,6 +43,21 @@ func TestBoardGameToFields(t *testing.T) {
 	}
 }
 
+func TestBoardGameToFieldsIncludesAccount(t *testing.T) {
+	snap := models.BoardStatsSnapshot{Date: "2026-08-12", Account: "13800000000", ScrapedAt: time.Now()}
+	g := models.GameBoardStats{GameName: "原神"}
+	f := boardGameToFields(snap, g)
+	if f[boardFieldAccount] != "13800000000" {
+		t.Fatalf("%v", f)
+	}
+}
+
+func TestBoardRecordKey(t *testing.T) {
+	if got := boardRecordKey("2026-08-12", "138", "原神"); got != "2026-08-12|138|原神" {
+		t.Fatal(got)
+	}
+}
+
 func TestParseMetricNumber(t *testing.T) {
 	cases := []struct {
 		in   string

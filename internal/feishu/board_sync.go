@@ -15,6 +15,7 @@ import (
 // 看板统计多维表格字段（与飞书列名一致）
 const (
 	boardFieldDate         = "日期"
+	boardFieldAccount      = "账号"
 	boardFieldGame         = "游戏名称"
 	boardFieldConsult      = "咨询量"
 	boardFieldView         = "带看量"
@@ -42,6 +43,7 @@ type boardFieldDef struct {
 
 var boardFieldDefs = []boardFieldDef{
 	{boardFieldDate, fieldTypeDatetime},
+	{boardFieldAccount, fieldTypeText},
 	{boardFieldGame, fieldTypeText},
 	{boardFieldConsult, fieldTypeNumber},
 	{boardFieldView, fieldTypeNumber},
@@ -131,7 +133,7 @@ func (b *BitableOps) listFieldNames(ctx context.Context, tableID string) (map[st
 	return names, nil
 }
 
-// SyncBoardStats 将看板快照写入多维表格：先建字段，再按「日期+游戏」upsert。
+// SyncBoardStats 将看板快照写入多维表格：先建字段，再按「日期+账号+游戏」upsert。
 func (b *BitableOps) SyncBoardStats(ctx context.Context, tableID string, snap models.BoardStatsSnapshot) (newCount, updCount int, err error) {
 	if tableID == "" {
 		return 0, 0, fmt.Errorf("board_table_id 为空")
@@ -146,17 +148,18 @@ func (b *BitableOps) SyncBoardStats(ctx context.Context, tableID string, snap mo
 	keyToID := make(map[string]string, len(existing))
 	for _, rec := range existing {
 		dateKey := boardDateKey(rec.Fields[boardFieldDate])
+		account := fieldAsString(rec.Fields[boardFieldAccount])
 		game := fieldAsString(rec.Fields[boardFieldGame])
 		if dateKey == "" || game == "" {
 			continue
 		}
-		keyToID[dateKey+"|"+game] = rec.RecordID
+		keyToID[boardRecordKey(dateKey, account, game)] = rec.RecordID
 	}
 
 	var toCreate []map[string]interface{}
 	for _, g := range snap.Games {
 		fields := boardGameToFields(snap, g)
-		key := snap.Date + "|" + g.GameName
+		key := boardRecordKey(snap.Date, snap.Account, g.GameName)
 		if rid, ok := keyToID[key]; ok {
 			path := fmt.Sprintf("/bitable/v1/apps/%s/tables/%s/records/%s", b.bitableID, tableID, rid)
 			var upd struct {
@@ -191,9 +194,14 @@ func (b *BitableOps) SyncBoardStats(ctx context.Context, tableID string, snap mo
 	return newCount, updCount, nil
 }
 
+func boardRecordKey(date, account, game string) string {
+	return date + "|" + account + "|" + game
+}
+
 func boardGameToFields(snap models.BoardStatsSnapshot, g models.GameBoardStats) map[string]interface{} {
 	fields := map[string]interface{}{
-		boardFieldGame: g.GameName,
+		boardFieldGame:    g.GameName,
+		boardFieldAccount: snap.Account,
 	}
 	if ms := dateStringToMillis(snap.Date); ms > 0 {
 		fields[boardFieldDate] = ms
