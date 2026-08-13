@@ -112,6 +112,7 @@ func (m *Manager) ScrapeBoardAll(ctx context.Context) (models.BoardStatsSnapshot
 			gs, err = fetcher.FetchBoardStats(ctx, game.Name)
 		}
 		if err != nil {
+			slog.Warn("看板抓取失败", "component", "scraper", "game", game.Name, "error", err)
 			gs = models.GameBoardStats{GameName: game.Name, TimeKey: "yesterday", Error: err.Error(), FetchedAt: time.Now()}
 			if id, okID := gameNameToID[game.Name]; okID {
 				gs.GameID = id

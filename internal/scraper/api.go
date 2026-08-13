@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -107,7 +108,10 @@ func (c *apiClient) FetchBoardStats(ctx context.Context, gameName string) (model
 	if !ok {
 		return models.GameBoardStats{}, fmt.Errorf("未找到游戏ID: %s", gameName)
 	}
+	return c.fetchBoardStats(ctx, gameName, gameID, true)
+}
 
+func (c *apiClient) fetchBoardStats(ctx context.Context, gameName string, gameID int, retryToken bool) (models.GameBoardStats, error) {
 	statsURL, err := c.buildRecycleStatsURL(gameID)
 	if err != nil {
 		return models.GameBoardStats{}, err
@@ -117,8 +121,8 @@ func (c *apiClient) FetchBoardStats(ctx context.Context, gameName string) (model
 	if err != nil {
 		return models.GameBoardStats{}, err
 	}
-	for _, ck := range c.cookies {
-		req.AddCookie(&http.Cookie{Name: ck.Name, Value: ck.Value, Domain: ck.Domain, Path: ck.Path})
+	if hdr := c.getCookieHeader(); hdr != "" {
+		req.Header.Set("Cookie", hdr)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -135,12 +139,52 @@ func (c *apiClient) FetchBoardStats(ctx context.Context, gameName string) (model
 		return models.GameBoardStats{}, fmt.Errorf("API返回 %d: %s", resp.StatusCode, string(body))
 	}
 
+	tokenRefreshed := c.applySetCookies(resp.Cookies())
+
 	stats, err := ParseRecycleStatsJSON(gameName, gameID, body)
 	if err != nil {
+		if retryToken && tokenRefreshed && errors.Is(err, errCookieExpired) {
+			slog.Info("MTOP token 已刷新，重试", "component", "scraper", "game", gameName)
+			return c.fetchBoardStats(ctx, gameName, gameID, false)
+		}
 		return models.GameBoardStats{}, err
 	}
 	stats.FetchedAt = time.Now()
 	return stats, nil
+}
+
+func (c *apiClient) applySetCookies(setCookies []*http.Cookie) (tokenRefreshed bool) {
+	updated := false
+	for _, sc := range setCookies {
+		if sc == nil || sc.Name == "" || sc.Value == "" {
+			continue
+		}
+		if sc.Name == "_m_h5_tk" {
+			tokenRefreshed = true
+		}
+		found := false
+		for i, ck := range c.cookies {
+			if ck.Name == sc.Name {
+				c.cookies[i].Value = sc.Value
+				found = true
+				updated = true
+				break
+			}
+		}
+		if !found {
+			c.cookies = append(c.cookies, models.CookieEntry{
+				Name:   sc.Name,
+				Value:  sc.Value,
+				Domain: sc.Domain,
+				Path:   sc.Path,
+			})
+			updated = true
+		}
+	}
+	if updated {
+		c.extractToken()
+	}
+	return tokenRefreshed
 }
 
 // ParseRecycleStatsJSON 解析 MTOP recyclestats 响应体（纯函数，便于单测）。
@@ -157,7 +201,7 @@ func ParseRecycleStatsJSON(gameName string, gameID int, body []byte) (models.Gam
 		if len(mtopResp.Ret) > 0 {
 			msg = mtopResp.Ret[0]
 		}
-		if strings.Contains(msg, "SESSION") {
+		if strings.Contains(msg, "SESSION") || strings.Contains(msg, "TOKEN") {
 			return models.GameBoardStats{}, fmt.Errorf("%w: %s", errCookieExpired, msg)
 		}
 		return models.GameBoardStats{}, fmt.Errorf("API错误: %s", msg)
