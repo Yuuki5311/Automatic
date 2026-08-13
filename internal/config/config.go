@@ -109,3 +109,17 @@ func Load(path string) (*Config, error) {
 	}
 	return cfg, nil
 }
+
+// WithJYMAccount returns a shallow copy of c with JYM credentials overridden.
+// The original config is unchanged; callers can pass the overlay to login helpers.
+func (c *Config) WithJYMAccount(username, password, cookiePath string) *Config {
+	if c == nil {
+		return &Config{JYM: JYMConfig{Username: username, Password: password, CookiePath: cookiePath}}
+	}
+	cp := *c
+	cp.JYM = c.JYM
+	cp.JYM.Username = username
+	cp.JYM.Password = password
+	cp.JYM.CookiePath = cookiePath
+	return &cp
+}

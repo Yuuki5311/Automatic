@@ -170,6 +170,53 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestWithJYMAccount(t *testing.T) {
+	base := &Config{
+		JYM: JYMConfig{
+			BaseURL:    "https://merchant.jiaoyimao.com",
+			Username:   "original_user",
+			Password:   "original_pass",
+			CookiePath: "./data/cookies.json",
+			LoginType:  "password",
+		},
+		Feishu: FeishuConfig{AppID: "cli_test"},
+	}
+
+	overlay := base.WithJYMAccount("acct_user", "acct_pass", "./data/cookies.acct.json")
+
+	if overlay.JYM.Username != "acct_user" {
+		t.Errorf("overlay JYM.Username = %q, want %q", overlay.JYM.Username, "acct_user")
+	}
+	if overlay.JYM.Password != "acct_pass" {
+		t.Errorf("overlay JYM.Password = %q, want %q", overlay.JYM.Password, "acct_pass")
+	}
+	if overlay.JYM.CookiePath != "./data/cookies.acct.json" {
+		t.Errorf("overlay JYM.CookiePath = %q, want %q", overlay.JYM.CookiePath, "./data/cookies.acct.json")
+	}
+	if overlay.JYM.BaseURL != "https://merchant.jiaoyimao.com" {
+		t.Errorf("overlay JYM.BaseURL = %q, want unchanged base URL", overlay.JYM.BaseURL)
+	}
+	if overlay.Feishu.AppID != "cli_test" {
+		t.Errorf("overlay Feishu.AppID = %q, want unchanged cli_test", overlay.Feishu.AppID)
+	}
+
+	// Mutating overlay must not change the original config.
+	overlay.JYM.Username = "mutated"
+	if base.JYM.Username != "original_user" {
+		t.Errorf("base JYM.Username = %q after overlay mutation, want %q", base.JYM.Username, "original_user")
+	}
+}
+
+func TestWithJYMAccountNil(t *testing.T) {
+	overlay := (*Config)(nil).WithJYMAccount("u", "p", "./c.json")
+	if overlay == nil {
+		t.Fatal("WithJYMAccount(nil) returned nil")
+	}
+	if overlay.JYM.Username != "u" || overlay.JYM.Password != "p" || overlay.JYM.CookiePath != "./c.json" {
+		t.Fatalf("overlay JYM = %+v, want u/p/./c.json", overlay.JYM)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {
