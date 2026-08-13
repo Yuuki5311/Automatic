@@ -3,11 +3,29 @@ package statsstore
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/models"
 )
+
+func TestSavePerAccount(t *testing.T) {
+	dir := t.TempDir()
+	snap := models.BoardStatsSnapshot{Date: "2026-08-12", Account: "13800000000", Games: nil}
+	path, err := Save(dir, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSuffix := filepath.Join("2026-08-12", "13800000000.json")
+	if !strings.HasSuffix(path, wantSuffix) {
+		t.Fatalf("path=%s want suffix %s", path, wantSuffix)
+	}
+	loaded, err := Load(dir, "2026-08-12", "13800000000")
+	if err != nil || loaded.Account != "13800000000" {
+		t.Fatalf("%v %+v", err, loaded)
+	}
+}
 
 func TestSaveOverwriteSameDate(t *testing.T) {
 	dir := t.TempDir()
@@ -25,15 +43,16 @@ func TestSaveOverwriteSameDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Load(dir, "2026-08-12")
+	got, err := Load(dir, "2026-08-12", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Games[0].Metrics[0].Value != "229" {
 		t.Fatalf("want overwrite 229, got %s", got.Games[0].Metrics[0].Value)
 	}
-	if filepath.Base(path) != "2026-08-12.json" {
-		t.Fatalf("path=%s", path)
+	wantSuffix := filepath.Join("2026-08-12", "_default.json")
+	if !strings.HasSuffix(path, wantSuffix) {
+		t.Fatalf("path=%s want suffix %s", path, wantSuffix)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)

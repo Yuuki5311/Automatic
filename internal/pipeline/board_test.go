@@ -54,7 +54,7 @@ func TestBoardRunRecordsMetricsAndStatsDate(t *testing.T) {
 	if len(snap.Games) != 1 || snap.Games[0].GameName != "原神" || snap.Games[0].RecordCount != 1 {
 		t.Fatalf("games=%+v", snap.Games)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "2026-08-12.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "2026-08-12", "_default.json")); err != nil {
 		t.Fatalf("expected saved snapshot: %v", err)
 	}
 }

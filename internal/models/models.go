@@ -59,6 +59,7 @@ type GameBoardStats struct {
 
 type BoardStatsSnapshot struct {
 	Date      string           `json:"date"`
+	Account   string           `json:"account,omitempty"`
 	ScrapedAt time.Time        `json:"scraped_at"`
 	Games     []GameBoardStats `json:"games"`
 }
