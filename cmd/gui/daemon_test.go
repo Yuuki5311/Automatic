@@ -32,7 +32,7 @@ func TestStartDaemonCron_SetsRunningAndAcceptsDailyNine(t *testing.T) {
 
 func TestStartLocalDashboardServesOnKeptListener(t *testing.T) {
 	store := status.NewStore()
-	srv, err := web.New(store, &config.Config{}, nil, nil, nil)
+	srv, err := web.New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

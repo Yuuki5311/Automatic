@@ -5,12 +5,14 @@ import (
 	"embed"
 	"encoding/json"
 	"html/template"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
@@ -30,6 +32,7 @@ type Server struct {
 	loginSvc      *auth.LoginService
 	browserMgr    *browser.Manager
 	captchaSolver captcha.Solver
+	accounts      *accounts.Store
 	scrapeFn      func()
 	scrapeMu      sync.Mutex
 	scraping      bool
@@ -37,7 +40,7 @@ type Server struct {
 
 // New 创建 Web 服务器。
 func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
-	browserMgr *browser.Manager, captchaSolver captcha.Solver) (*Server, error) {
+	browserMgr *browser.Manager, captchaSolver captcha.Solver, acctStore *accounts.Store) (*Server, error) {
 	tmpl, err := template.New("index.html").Funcs(template.FuncMap{
 		"fmtTime":      fmtTime,
 		"fmtDur":       fmtDur,
@@ -55,6 +58,7 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 		loginSvc:      loginSvc,
 		browserMgr:    browserMgr,
 		captchaSolver: captchaSolver,
+		accounts:      acctStore,
 	}
 
 	mux := http.NewServeMux()
@@ -64,6 +68,11 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 	mux.HandleFunc("/api/cookies", s.handleCookies)
 	mux.HandleFunc("/api/scrape", s.handleScrape)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("GET /api/accounts", s.handleAccountsList)
+	mux.HandleFunc("POST /api/accounts", s.handleAccountsAdd)
+	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleAccountDelete)
+	mux.HandleFunc("POST /api/accounts/{id}/cookies", s.handleAccountCookies)
+	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleAccountLogin)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
 	return s, nil
@@ -100,6 +109,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	s.refreshAccountStatus()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(s.store.Snapshot())
 }
@@ -149,46 +159,18 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogin 触发自动登录，异步执行。
-// POST /api/login  — 无需请求体，使用配置文件中的账号密码。
-// 登录过程中，/api/status 的 login_phase 字段会依次变为 running → success/failed。
+// POST /api/login — 仅当账户库恰好有一个账号时登录该账号；否则 400，请用 POST /api/accounts/{id}/login。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 检查是否已有登录在进行
-	snap := s.store.Snapshot()
-	if snap.LoginPhase == status.LoginRunning {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(map[string]string{"status": "already_running"})
+	if s.accounts == nil || len(s.accounts.List()) != 1 {
+		http.Error(w, "use POST /api/accounts/{id}/login for a specific account", http.StatusBadRequest)
 		return
 	}
-
-	s.store.SetLoginPhase(status.LoginRunning, "")
-
-	// 异步执行登录，不阻塞 HTTP 响应
-	go func() {
-		ctx, cancel := s.browserMgr.NewContext(s.cfg.Browser.TimeoutSec)
-		defer cancel()
-
-		cookies, err := s.loginSvc.PerformLogin(ctx, s.cfg, s.captchaSolver)
-		if err != nil {
-			slog.Error("UI触发登录失败", "component", "web", "error", err)
-			s.store.SetLoginPhase(status.LoginFailed, err.Error())
-			return
-		}
-
-		// 登录成功，保存 Cookie
-		if err := auth.SaveCookies(s.cfg.JYM.CookiePath, cookies); err != nil {
-			slog.Error("保存Cookie失败", "component", "web", "error", err)
-		}
-		s.store.SetCookie(cookies, auth.IsCookieValid(cookies))
-		s.store.SetLoginPhase(status.LoginSuccess, "")
-	}()
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	s.startAccountLogin(s.accounts.List()[0], w)
 }
 
 // handleCookies 手动导入 Cookie。
@@ -234,6 +216,177 @@ func (s *Server) handleCookies(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"count":  len(rawCookies),
 	})
+}
+
+func (s *Server) handleAccountsList(w http.ResponseWriter, _ *http.Request) {
+	s.refreshAccountStatus()
+	list := s.accountStatuses()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(list)
+}
+
+func (s *Server) handleAccountsAdd(w http.ResponseWriter, r *http.Request) {
+	if s.accounts == nil {
+		http.Error(w, "accounts not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "JSON 解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	acct, err := s.accounts.Add(req.Username, req.Password)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.refreshAccountStatus()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(accountToStatus(acct))
+}
+
+func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
+	acct, ok := s.lookupAccount(r)
+	if !ok {
+		http.Error(w, "账户不存在", http.StatusNotFound)
+		return
+	}
+	if err := s.accounts.Delete(acct.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	s.refreshAccountStatus()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAccountCookies(w http.ResponseWriter, r *http.Request) {
+	acct, ok := s.lookupAccount(r)
+	if !ok {
+		http.Error(w, "账户不存在", http.StatusNotFound)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := auth.ImportFromJSON(acct.CookiePath, body); err != nil {
+		http.Error(w, "导入失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.refreshAccountStatus()
+	cookies, _ := auth.LoadCookies(acct.CookiePath)
+	count := 0
+	if cookies != nil {
+		count = len(cookies.Cookies)
+	}
+	slog.Info("Cookie已通过UI按账户导入", "component", "web", "account", acct.Username, "count", count)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"count":  count,
+	})
+}
+
+func (s *Server) handleAccountLogin(w http.ResponseWriter, r *http.Request) {
+	acct, ok := s.lookupAccount(r)
+	if !ok {
+		http.Error(w, "账户不存在", http.StatusNotFound)
+		return
+	}
+	s.startAccountLogin(acct, w)
+}
+
+func (s *Server) lookupAccount(r *http.Request) (accounts.Account, bool) {
+	if s.accounts == nil {
+		return accounts.Account{}, false
+	}
+	return s.accounts.Get(r.PathValue("id"))
+}
+
+func (s *Server) startAccountLogin(acct accounts.Account, w http.ResponseWriter) {
+	snap := s.store.Snapshot()
+	if snap.LoginPhase == status.LoginRunning {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"status": "already_running"})
+		return
+	}
+
+	s.store.SetLoginPhase(status.LoginRunning, "")
+
+	go func() {
+		if s.browserMgr == nil || s.loginSvc == nil {
+			s.store.SetLoginPhase(status.LoginFailed, "login not configured")
+			s.refreshAccountStatus()
+			return
+		}
+		ctx, cancel := s.browserMgr.NewContext(s.cfg.Browser.TimeoutSec)
+		defer cancel()
+
+		acctCfg := s.cfg.WithJYMAccount(acct.Username, acct.Password, acct.CookiePath)
+		cookies, err := s.loginSvc.PerformLogin(ctx, acctCfg, s.captchaSolver)
+		if err != nil {
+			slog.Error("UI触发登录失败", "component", "web", "account", acct.Username, "error", err)
+			s.store.SetLoginPhase(status.LoginFailed, err.Error())
+			s.refreshAccountStatus()
+			return
+		}
+
+		if err := auth.SaveCookies(acct.CookiePath, cookies); err != nil {
+			slog.Error("保存Cookie失败", "component", "web", "account", acct.Username, "error", err)
+		}
+		s.store.SetCookie(cookies, auth.IsCookieValid(cookies))
+		s.store.SetLoginPhase(status.LoginSuccess, "")
+		s.refreshAccountStatus()
+	}()
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+}
+
+func (s *Server) refreshAccountStatus() {
+	if s.store == nil {
+		return
+	}
+	if s.accounts == nil {
+		s.store.SetAccounts(nil)
+		return
+	}
+	list := s.accounts.List()
+	out := make([]status.AccountStatus, 0, len(list))
+	for _, a := range list {
+		out = append(out, accountToStatus(a))
+	}
+	s.store.SetAccounts(out)
+}
+
+func (s *Server) accountStatuses() []status.AccountStatus {
+	if s.store == nil {
+		return []status.AccountStatus{}
+	}
+	list := s.store.Snapshot().Accounts
+	if list == nil {
+		return []status.AccountStatus{}
+	}
+	return list
+}
+
+func accountToStatus(a accounts.Account) status.AccountStatus {
+	cookies, _ := auth.LoadCookies(a.CookiePath)
+	return status.AccountStatus{
+		ID:          a.ID,
+		Username:    a.Username,
+		Enabled:     a.Enabled,
+		LastStatus:  a.LastStatus,
+		LastError:   a.LastError,
+		LastRunAt:   a.LastRunAt,
+		CookieValid: auth.IsCookieValid(cookies),
+		HasPassword: a.Password != "",
+	}
 }
 
 func fmtTime(t time.Time) string {

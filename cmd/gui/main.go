@@ -71,7 +71,7 @@ func main() {
 	st := status.NewStore()
 
 	// 启动 HTTP 仪表盘（复用 web 包，含 / /api/status /api/login /api/cookies）
-	webSrv, err := web.New(st, cfg, loginSvc, browserMgr, captchaSolver)
+	webSrv, err := web.New(st, cfg, loginSvc, browserMgr, captchaSolver, nil)
 	if err != nil {
 		panic(err)
 	}

@@ -95,7 +95,7 @@ func TestHandleScrapeAlreadyRunning(t *testing.T) {
 func TestNewRegistersScrapeRoute(t *testing.T) {
 	store := status.NewStore()
 	called := make(chan struct{})
-	s, err := New(store, &config.Config{}, nil, nil, nil)
+	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 	}, nil)
 	store.RunFinished(nil, 1)
 
-	s, err := New(store, &config.Config{}, nil, nil, nil)
+	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 }
 
 func TestDashboardPollReloadsOnScrapeChanges(t *testing.T) {
-	s, err := New(status.NewStore(), &config.Config{}, nil, nil, nil)
+	s, err := New(status.NewStore(), &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestDashboardLoginFailedRedStyle(t *testing.T) {
 	store := status.NewStore()
 	store.SetLoginPhase(status.LoginFailed, "账号或密码错误")
 
-	s, err := New(store, &config.Config{}, nil, nil, nil)
+	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

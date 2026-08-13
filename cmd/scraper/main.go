@@ -81,7 +81,7 @@ func main() {
 	// 6. 启动 Web 仪表盘（可选）
 	var webSrv *web.Server
 	if *webFlag {
-		webSrv, err = web.New(st, cfg, loginSvc, browserMgr, captchaSolver)
+		webSrv, err = web.New(st, cfg, loginSvc, browserMgr, captchaSolver, nil)
 		if err != nil {
 			slog.Error("初始化Web仪表盘失败", "component", "main", "error", err)
 		} else {
