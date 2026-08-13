@@ -50,7 +50,7 @@ func IsCookieValid(data *models.CookieData) bool {
 	// 至少需要有登录态的关键Cookie
 	hasSessionCookie := false
 	for _, c := range data.Cookies {
-		if c.Name == "token" || c.Name == "SESSION" || c.Name == "jym_token" {
+		if c.Name == "_m_h5_tk" || c.Name == "_m_h5_tk_enc" || c.Name == "token" || c.Name == "SESSION" || c.Name == "jym_token" {
 			if c.Value != "" {
 				hasSessionCookie = true
 				break
