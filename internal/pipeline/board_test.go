@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,6 +123,55 @@ func TestBoardRunKeepsMetricsOnSaveFailure(t *testing.T) {
 	}
 	if snap.LastRun == nil || snap.LastRun.Success || snap.LastRun.Error != "disk full" {
 		t.Fatalf("LastRun=%+v", snap.LastRun)
+	}
+}
+
+func TestBoardRunSecondCallerGetsAlreadyRunning(t *testing.T) {
+	st := status.NewStore()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	r := &BoardRun{
+		Cfg:   &config.Config{},
+		Store: st,
+		NewContext: func(int) (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		},
+		PrepCookies: func(context.Context) (*models.CookieData, error) {
+			return validCookie(), nil
+		},
+		Scrape: func(context.Context, *models.CookieData) (models.BoardStatsSnapshot, error) {
+			close(started)
+			<-release
+			return models.BoardStatsSnapshot{Date: "2026-08-12"}, nil
+		},
+		Save: func(string, models.BoardStatsSnapshot) (string, error) {
+			return "ok", nil
+		},
+	}
+
+	var firstErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		firstErr = r.Run()
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first Run did not start scrape")
+	}
+
+	err := r.Run()
+	if err == nil || err.Error() != "scrape already running" {
+		t.Fatalf("second Run err=%v, want %q", err, "scrape already running")
+	}
+
+	close(release)
+	wg.Wait()
+	if firstErr != nil {
+		t.Fatalf("first Run: %v", firstErr)
 	}
 }
 

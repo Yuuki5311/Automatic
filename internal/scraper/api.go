@@ -44,9 +44,10 @@ var gameNameToID = map[string]int{
 }
 
 type apiClient struct {
-	httpClient *http.Client
-	cookies    []models.CookieEntry
-	mtopToken  string // _m_h5_tk 中提取的 token 部分
+	httpClient     *http.Client
+	cookies        []models.CookieEntry
+	mtopToken      string // _m_h5_tk 中提取的 token 部分
+	persistCookies func(cookies []models.CookieEntry) error
 }
 
 func newAPIClient(baseURL string, cookies []models.CookieEntry) *apiClient {
@@ -183,6 +184,11 @@ func (c *apiClient) applySetCookies(setCookies []*http.Cookie) (tokenRefreshed b
 	}
 	if updated {
 		c.extractToken()
+	}
+	if tokenRefreshed && c.persistCookies != nil {
+		if err := c.persistCookies(c.cookies); err != nil {
+			slog.Warn("保存刷新后的 _m_h5_tk 失败", "component", "scraper", "error", err)
+		}
 	}
 	return tokenRefreshed
 }

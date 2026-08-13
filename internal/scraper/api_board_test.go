@@ -181,3 +181,43 @@ func TestFetchBoardStats_RetriesAfterTokenExpiredSetCookie(t *testing.T) {
 		t.Fatalf("mtopToken=%q want fresh", c.mtopToken)
 	}
 }
+
+func TestFetchBoardStats_PersistsRefreshedTokenCookie(t *testing.T) {
+	const successBody = `{"ret":["SUCCESS::调用成功"],"data":{"result":[{"title":"咨询量","staData":"1","properties":{"tips":"t"}}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "_m_h5_tk", Value: "fresh_999", Path: "/"})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(successBody))
+	}))
+	defer srv.Close()
+
+	var got []models.CookieEntry
+	c := &apiClient{
+		httpClient: srv.Client(),
+		cookies:    []models.CookieEntry{{Name: "_m_h5_tk", Value: "stale_111"}},
+		mtopToken:  "stale",
+		persistCookies: func(entries []models.CookieEntry) error {
+			got = append([]models.CookieEntry(nil), entries...)
+			return nil
+		},
+	}
+	origBase := mtopBaseURL
+	mtopBaseURL = srv.URL
+	t.Cleanup(func() { mtopBaseURL = origBase })
+
+	if _, err := c.FetchBoardStats(context.Background(), "原神"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected persistCookies after _m_h5_tk Set-Cookie")
+	}
+	found := false
+	for _, ck := range got {
+		if ck.Name == "_m_h5_tk" && ck.Value == "fresh_999" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("persisted cookies=%+v, want _m_h5_tk=fresh_999", got)
+	}
+}

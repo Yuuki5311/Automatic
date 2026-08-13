@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -79,6 +80,11 @@ func (s *Server) SetScrapeFunc(fn func()) {
 func (s *Server) ListenAndServe(addr string) error {
 	s.srv.Addr = addr
 	return s.srv.ListenAndServe()
+}
+
+// Serve 在已绑定的 listener 上提供服务（避免 Close 后再 ListenAndServe 的端口竞态）。
+func (s *Server) Serve(l net.Listener) error {
+	return s.srv.Serve(l)
 }
 
 // Shutdown 优雅关闭。

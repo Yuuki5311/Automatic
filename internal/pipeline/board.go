@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/auth"
@@ -25,7 +26,12 @@ type BoardRun struct {
 	PrepCookies func(ctx context.Context) (*models.CookieData, error)
 	Scrape      func(ctx context.Context, cookies *models.CookieData) (models.BoardStatsSnapshot, error)
 	Save        func(dir string, snap models.BoardStatsSnapshot) (string, error)
+
+	mu sync.Mutex
 }
+
+// ErrScrapeRunning 已有一轮看板抓取在执行（HTTP 与 cron 共用同一把锁）。
+var ErrScrapeRunning = errors.New("scrape already running")
 
 // NewBoardRun 组装真实依赖的看板抓取流程。
 func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth.LoginService, solver captcha.Solver, st *status.Store) *BoardRun {
@@ -56,8 +62,13 @@ func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth
 	}
 }
 
-// Run 执行一轮看板抓取。
-func (r *BoardRun) Run() {
+// Run 执行一轮看板抓取。并发第二次调用立即返回 ErrScrapeRunning。
+func (r *BoardRun) Run() error {
+	if !r.mu.TryLock() {
+		return ErrScrapeRunning
+	}
+	defer r.mu.Unlock()
+
 	slog.Info("========== 开始抓取 ==========", "component", "pipeline")
 	startTime := time.Now()
 
@@ -82,7 +93,7 @@ func (r *BoardRun) Run() {
 		slog.Error("Cookie准备失败", "component", "pipeline", "error", err)
 		r.Store.SetLoginPhase(status.LoginFailed, err.Error())
 		r.Store.RunFinished(err, 0)
-		return
+		return nil
 	}
 	r.Store.SetCookie(cookies, auth.IsCookieValid(cookies))
 	r.Store.SetLoginPhase(status.LoginIdle, "")
@@ -97,19 +108,19 @@ func (r *BoardRun) Run() {
 	if err != nil {
 		slog.Error("抓取数据失败", "component", "pipeline", "error", err)
 		r.Store.RunFinished(err, 0)
-		return
+		return nil
 	}
 
 	if r.Save == nil {
 		saveErr := errors.New("save function not configured")
 		r.Store.RunFinished(saveErr, 0)
-		return
+		return nil
 	}
 	path, saveErr := r.Save(statsDir, snap)
 	if saveErr != nil {
 		slog.Error("写入看板统计失败", "component", "pipeline", "error", saveErr, "dir", statsDir)
 		r.Store.RunFinished(saveErr, 0)
-		return
+		return nil
 	}
 
 	okGames := 0
@@ -122,6 +133,7 @@ func (r *BoardRun) Run() {
 
 	elapsed := time.Since(startTime)
 	slog.Info("========== 抓取完成 ==========", "component", "pipeline", "duration", elapsed.String(), "path", path, "games", okGames)
+	return nil
 }
 
 func recordBoardGames(st *status.Store, snap models.BoardStatsSnapshot) {

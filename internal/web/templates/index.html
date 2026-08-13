@@ -234,8 +234,24 @@ async function importCookies(){
     if(r.ok){m('导入成功！共 '+d.count+' 个 Cookie','ok');document.getElementById('cookie-json').value='';setTimeout(()=>location.reload(),1500)}
     else m('导入失败: '+(d.error||await r.text()),'err')}catch(e){m('请求失败: '+e.message,'err')}}
 function m(msg,cls){document.getElementById('import-msg').innerHTML='<span class="msg '+cls+'">'+msg+'</span>'}
+function scrapeKey(s){
+  return JSON.stringify({
+    cur: !!(s&&s.current_run),
+    ended: s&&s.last_run&&s.last_run.ended_at,
+    date: s&&s.last_run&&s.last_run.stats_date,
+    games: (s&&s.games)||[]
+  });
+}
+const renderedScrape = {cur:{{if .CurrentRun}}true{{else}}false{{end}}, date:'{{if .LastRun}}{{.LastRun.StatsDate}}{{end}}', n:{{len .Games}}};
+let prevScrapeKey = null;
 (async function poll(){
   try{const r=await fetch('/api/status');const s=await r.json();
+    const k=scrapeKey(s);
+    if(prevScrapeKey===null){
+      prevScrapeKey=k;
+      const liveCur=!!s.current_run, liveDate=(s.last_run&&s.last_run.stats_date)||'', liveN=(s.games||[]).length;
+      if(liveCur!==renderedScrape.cur||liveDate!==renderedScrape.date||liveN!==renderedScrape.n){location.reload();return;}
+    }else if(k!==prevScrapeKey){location.reload();return;}
     const db=document.getElementById('badge-daemon');db.textContent=s.daemon_state==='running'?'运行中':'已停止';db.className='badge '+(s.daemon_state==='running'?'on':'off');
     if(s.login_phase==='failed'&&!document.querySelector('.section.login-failed')){location.reload();return}
     if(s.login_phase==='success'||s.login_phase==='failed'){if('{{.LoginPhase}}'==='running'){location.reload();return}}

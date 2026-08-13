@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -74,7 +76,12 @@ func main() {
 		panic(err)
 	}
 
-	scrapeFn := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st).Run
+	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st)
+	scrapeFn := func() {
+		if err := board.Run(); err != nil {
+			slog.Warn("抓取未执行", "error", err)
+		}
+	}
 	webSrv.SetScrapeFunc(scrapeFn)
 
 	cronSched, err := startDaemonCron(cfg, st, scrapeFn)
@@ -84,19 +91,10 @@ func main() {
 	}
 	slog.Info("GUI 守护进程已启动", "cron", cfg.Scraper.CronExpr)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	addr, err := startLocalDashboard(webSrv)
 	if err != nil {
 		panic(err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	go func() {
-		slog.Info("仪表盘HTTP服务启动", "port", port)
-		if err := webSrv.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
-			slog.Error("HTTP服务错误", "error", err)
-		}
-	}()
 
 	// Wails 窗口加载 HTTP 仪表盘
 	wa := application.New(application.Options{
@@ -110,7 +108,7 @@ func main() {
 		Height:          780,
 		MinWidth:        800,
 		MinHeight:       600,
-		URL:             fmt.Sprintf("http://127.0.0.1:%d", port),
+		URL:             "http://" + addr,
 		DevToolsEnabled: true,
 	})
 
@@ -128,4 +126,20 @@ func main() {
 		slog.Error("应用启动失败", "error", err)
 		os.Exit(1)
 	}
+}
+
+// startLocalDashboard 绑定临时端口并在同一 listener 上 Serve，避免 Close 后再 ListenAndServe 的竞态。
+func startLocalDashboard(srv *web.Server) (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	addr := ln.Addr().String()
+	go func() {
+		slog.Info("仪表盘HTTP服务启动", "addr", addr)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("HTTP服务错误", "error", err)
+		}
+	}()
+	return addr, nil
 }

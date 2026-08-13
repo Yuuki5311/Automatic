@@ -154,6 +154,28 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 	}
 }
 
+func TestDashboardPollReloadsOnScrapeChanges(t *testing.T) {
+	s, err := New(status.NewStore(), &config.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"current_run",
+		"last_run",
+		"stats_date",
+		"s.games",
+		"location.reload",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("poll script missing scrape-refresh marker %q", want)
+		}
+	}
+}
+
 func TestDashboardLoginFailedRedStyle(t *testing.T) {
 	store := status.NewStore()
 	store.SetLoginPhase(status.LoginFailed, "账号或密码错误")

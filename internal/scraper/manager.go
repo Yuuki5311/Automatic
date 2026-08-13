@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/models"
@@ -46,6 +47,12 @@ func NewManager(cfg *config.Config, browserMgr *browser.Manager, cookies *models
 	if cfg != nil {
 		m.apiClient = newAPIClient(cfg.JYM.BaseURL, cookieEntries)
 		m.fetcher = m.apiClient
+		if path := cfg.JYM.CookiePath; path != "" && cookies != nil {
+			m.apiClient.persistCookies = func(entries []models.CookieEntry) error {
+				cookies.Cookies = entries
+				return auth.SaveCookies(path, cookies)
+			}
+		}
 	}
 	m.browserS = newBrowserScraper(cfg, browserMgr, cookieEntries)
 	return m

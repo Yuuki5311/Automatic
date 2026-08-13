@@ -71,7 +71,12 @@ func main() {
 
 	// 5. 状态存储器 + 共用看板抓取流程（Web /api/scrape 与 -once/-daemon 同一路径）
 	st := status.NewStore()
-	runScrape := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st).Run
+	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st)
+	runScrape := func() {
+		if err := board.Run(); err != nil {
+			slog.Warn("抓取未执行", "component", "main", "error", err)
+		}
+	}
 
 	// 6. 启动 Web 仪表盘（可选）
 	var webSrv *web.Server
