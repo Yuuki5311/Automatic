@@ -234,6 +234,18 @@ func TestBoardRunSecondCallerGetsAlreadyRunning(t *testing.T) {
 	}
 }
 
+func TestNewBoardRunWiresAccounts(t *testing.T) {
+	as := accounts.NewStore(filepath.Join(t.TempDir(), "accounts.json"))
+	st := status.NewStore()
+	r := NewBoardRun(&config.Config{}, nil, nil, nil, st, as)
+	if r.Accounts != as {
+		t.Fatal("NewBoardRun should set Accounts")
+	}
+	if r.Store != st {
+		t.Fatal("NewBoardRun should set Store")
+	}
+}
+
 func testAccountStore(t *testing.T, usernames ...string) *accounts.Store {
 	t.Helper()
 	as := accounts.NewStore(filepath.Join(t.TempDir(), "accounts.json"))

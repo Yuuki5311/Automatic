@@ -38,6 +38,15 @@ type Store struct {
 
 func NewStore(path string) *Store { return &Store{path: path} }
 
+// PathFromCookie returns accounts.json beside the cookie file, or ./data/accounts.json.
+func PathFromCookie(cookiePath string) string {
+	cookiePath = strings.TrimSpace(cookiePath)
+	if cookiePath == "" {
+		return filepath.Join("data", "accounts.json")
+	}
+	return filepath.Join(filepath.Dir(cookiePath), "accounts.json")
+}
+
 func SafeUsername(u string) string {
 	var b strings.Builder
 	for _, r := range u {

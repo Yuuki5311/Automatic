@@ -11,6 +11,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
@@ -70,13 +71,17 @@ func main() {
 	loginSvc := &auth.LoginService{}
 	st := status.NewStore()
 
+	acctStore := accounts.NewStore(accounts.PathFromCookie(cfg.JYM.CookiePath))
+	_ = acctStore.Load()
+	_, _ = acctStore.MigrateFromConfig(cfg.JYM)
+
 	// 启动 HTTP 仪表盘（复用 web 包，含 / /api/status /api/login /api/cookies）
-	webSrv, err := web.New(st, cfg, loginSvc, browserMgr, captchaSolver, nil)
+	webSrv, err := web.New(st, cfg, loginSvc, browserMgr, captchaSolver, acctStore)
 	if err != nil {
 		panic(err)
 	}
 
-	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st)
+	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st, acctStore)
 	scrapeFn := func() {
 		if err := board.Run(); err != nil {
 			slog.Warn("抓取未执行", "error", err)

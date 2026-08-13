@@ -46,6 +46,18 @@ func TestAddDuplicate(t *testing.T) {
 	}
 }
 
+func TestPathFromCookie(t *testing.T) {
+	got := PathFromCookie("./data/cookies.json")
+	want := filepath.Join(filepath.Dir("./data/cookies.json"), "accounts.json")
+	if got != want {
+		t.Fatalf("PathFromCookie(cookie)=%q, want %q", got, want)
+	}
+	empty := PathFromCookie("  ")
+	if empty != filepath.Join("data", "accounts.json") {
+		t.Fatalf("PathFromCookie(empty)=%q, want data/accounts.json", empty)
+	}
+}
+
 func TestMigrateFromConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "accounts.json")

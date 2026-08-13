@@ -74,6 +74,7 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 	mux.HandleFunc("POST /api/accounts/{id}/cookies", s.handleAccountCookies)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleAccountLogin)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	s.refreshAccountStatus()
 
 	return s, nil
 }
@@ -102,6 +103,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
+	s.refreshAccountStatus()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.Execute(w, s.store.Snapshot()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -349,11 +351,7 @@ func (s *Server) startAccountLogin(acct accounts.Account, w http.ResponseWriter)
 }
 
 func (s *Server) refreshAccountStatus() {
-	if s.store == nil {
-		return
-	}
-	if s.accounts == nil {
-		s.store.SetAccounts(nil)
+	if s.store == nil || s.accounts == nil {
 		return
 	}
 	list := s.accounts.List()

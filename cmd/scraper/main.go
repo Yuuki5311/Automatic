@@ -20,6 +20,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
@@ -69,9 +70,13 @@ func main() {
 	loginSvc := &auth.LoginService{}
 	captchaSolver := newCaptchaSolver(&cfg.Captcha)
 
-	// 5. 状态存储器 + 共用看板抓取流程（Web /api/scrape 与 -once/-daemon 同一路径）
+	// 5. 账户库（从 config.JYM 迁移遗留单账号）+ 状态 + 看板抓取流程
+	acctStore := accounts.NewStore(accounts.PathFromCookie(cfg.JYM.CookiePath))
+	_ = acctStore.Load()
+	_, _ = acctStore.MigrateFromConfig(cfg.JYM)
+
 	st := status.NewStore()
-	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st)
+	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st, acctStore)
 	runScrape := func() {
 		if err := board.Run(); err != nil {
 			slog.Warn("抓取未执行", "component", "main", "error", err)
@@ -81,7 +86,7 @@ func main() {
 	// 6. 启动 Web 仪表盘（可选）
 	var webSrv *web.Server
 	if *webFlag {
-		webSrv, err = web.New(st, cfg, loginSvc, browserMgr, captchaSolver, nil)
+		webSrv, err = web.New(st, cfg, loginSvc, browserMgr, captchaSolver, acctStore)
 		if err != nil {
 			slog.Error("初始化Web仪表盘失败", "component", "main", "error", err)
 		} else {

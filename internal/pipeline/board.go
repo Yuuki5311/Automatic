@@ -43,10 +43,11 @@ type BoardRun struct {
 var ErrScrapeRunning = errors.New("scrape already running")
 
 // NewBoardRun 组装真实依赖的看板抓取流程。
-func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth.LoginService, solver captcha.Solver, st *status.Store) *BoardRun {
+func NewBoardRun(cfg *config.Config, browserMgr *browser.Manager, loginSvc *auth.LoginService, solver captcha.Solver, st *status.Store, acctStore *accounts.Store) *BoardRun {
 	r := &BoardRun{
-		Cfg:   cfg,
-		Store: st,
+		Cfg:      cfg,
+		Store:    st,
+		Accounts: acctStore,
 		NewContext: func(timeoutSec int) (context.Context, context.CancelFunc) {
 			return browserMgr.NewContext(timeoutSec)
 		},

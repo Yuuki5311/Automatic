@@ -198,6 +198,29 @@ func TestLegacyLoginSingleAccountStarts(t *testing.T) {
 	}
 }
 
+func TestIndexRefreshesAccountsFromStore(t *testing.T) {
+	acct := accounts.NewStore(filepath.Join(t.TempDir(), "accounts.json"))
+	if err := acct.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acct.Add("indexu", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(status.NewStore(), &config.Config{}, nil, nil, nil, acct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "indexu") {
+		t.Fatalf("index should render accounts from store, body=%s", rec.Body.String())
+	}
+}
+
 func TestAccountsAppearInStatusSnapshot(t *testing.T) {
 	ts := newAccountsAPI(t)
 	postAccount(t, ts, "snapu", "pw")
