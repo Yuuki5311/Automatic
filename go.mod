@@ -27,4 +27,5 @@ require (
 	github.com/ysmood/leakless v0.9.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )

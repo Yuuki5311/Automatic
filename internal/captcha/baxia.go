@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
-	"math/rand"
 	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/browser"
@@ -282,56 +280,7 @@ func dragBaxiaInsideIframe(ctx context.Context) error {
 	}
 	slog.Info("百炼滑块行程", "component", "captcha",
 		"distance", m.Distance, "remain", m.Remain, "trackW", m.TrackW, "btnW", m.BtnW, "iframeW", m.IframeW)
-	return dragBaxiaHuman(ctx, m.StartX, m.StartY, m.Distance)
-}
-
-func dragBaxiaHuman(ctx context.Context, startX, startY float64, distance int) error {
-	if distance <= 0 {
-		return fmt.Errorf("拖拽距离无效: %d", distance)
-	}
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	if err := browser.MouseMove(ctx, startX, startY); err != nil {
-		return err
-	}
-	if err := browser.Sleep(ctx, time.Duration(200+rng.Intn(200))*time.Millisecond); err != nil {
-		return err
-	}
-	if err := browser.MouseDown(ctx); err != nil {
-		return err
-	}
-	if err := browser.Sleep(ctx, time.Duration(80+rng.Intn(120))*time.Millisecond); err != nil {
-		return err
-	}
-
-	steps := 35 + rng.Intn(20)
-	for i := 1; i <= steps; i++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		t := float64(i) / float64(steps)
-		eased := 1 - math.Pow(1-t, 3)
-		pos := float64(distance)*eased + (rng.Float64()-0.5)*1.2
-		if pos < 0 {
-			pos = 0
-		}
-		yJitter := (rng.Float64() - 0.5) * 1.5
-		if err := browser.MouseMove(ctx, startX+pos, startY+yJitter); err != nil {
-			return err
-		}
-		ms := 15 + rng.Intn(25)
-		if t < 0.15 || t > 0.85 {
-			ms += 15 + rng.Intn(25)
-		}
-		time.Sleep(time.Duration(ms) * time.Millisecond)
-	}
-	if err := browser.MouseMove(ctx, startX+float64(distance), startY); err != nil {
-		return err
-	}
-	if err := browser.Sleep(ctx, time.Duration(60+rng.Intn(80))*time.Millisecond); err != nil {
-		return err
-	}
-	return browser.MouseUp(ctx)
+	return dragWithHumanTrace(ctx, m.StartX, m.StartY, m.Distance)
 }
 
 func waitBaxiaSliderRect(ctx context.Context, timeout time.Duration) (baxiaRect, error) {
