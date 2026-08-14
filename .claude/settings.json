@@ -192,7 +192,9 @@
       "Bash(JYM_E2E=1 go test ./internal/auth/ -run TestLoginIntegration -v -timeout 120s)",
       "Bash(gh --version)",
       "Bash(gh auth *)",
-      "Bash(grep -iE \"^\\\\+.*\\(api[_-]?key|secret|token|password\\)\\\\s*[:=]\\\\s*['\\\\\"]?[A-Za-z0-9]{8,}\")"
+      "Bash(grep -iE \"^\\\\+.*\\(api[_-]?key|secret|token|password\\)\\\\s*[:=]\\\\s*['\\\\\"]?[A-Za-z0-9]{8,}\")",
+      "Bash(git push *)",
+      "Bash(git fetch *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",
