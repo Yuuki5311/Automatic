@@ -17,6 +17,7 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
+	"github.com/example/jiaoyimao-scraper/internal/leyoo"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
 
@@ -33,9 +34,12 @@ type Server struct {
 	browserMgr    *browser.Manager
 	captchaSolver captcha.Solver
 	accounts      *accounts.Store
+	leyoo         *leyoo.Client
 	scrapeFn      func()
 	scrapeMu      sync.Mutex
 	scraping      bool
+	pullMu        sync.Mutex
+	pulling       bool
 }
 
 // New 创建 Web 服务器。
@@ -46,6 +50,7 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 		"fmtDur":       fmtDur,
 		"fmtRemaining": fmtRemaining,
 		"remClass":     remClass,
+		"groupHistory": groupHistory,
 	}).ParseFS(templatesFS, "templates/index.html")
 	if err != nil {
 		return nil, err
@@ -69,7 +74,10 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 	mux.HandleFunc("/api/scrape", s.handleScrape)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/accounts", s.handleAccountsList)
-	mux.HandleFunc("POST /api/accounts", s.handleAccountsAdd)
+	mux.HandleFunc("POST /api/accounts", s.handleAccountsAddRemoved)
+	mux.HandleFunc("POST /api/accounts/pull", s.handleAccountsPull)
+	mux.HandleFunc("POST /api/accounts/{id}/enable", s.handleAccountEnable)
+	mux.HandleFunc("POST /api/accounts/{id}/disable", s.handleAccountDisable)
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleAccountDelete)
 	mux.HandleFunc("POST /api/accounts/{id}/cookies", s.handleAccountCookies)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleAccountLogin)
@@ -227,28 +235,118 @@ func (s *Server) handleAccountsList(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-func (s *Server) handleAccountsAdd(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAccountsAddRemoved(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "手动添加已移除，请使用 POST /api/accounts/pull 拉取列表", http.StatusMethodNotAllowed)
+}
+
+func (s *Server) handleAccountsPull(w http.ResponseWriter, r *http.Request) {
 	if s.accounts == nil {
 		http.Error(w, "accounts not configured", http.StatusServiceUnavailable)
 		return
 	}
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		SupplierID int `json:"supplier_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "JSON 解析失败: "+err.Error(), http.StatusBadRequest)
+	if r.Body != nil && r.Body != http.NoBody {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "JSON 解析失败: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.SupplierID <= 0 {
+		req.SupplierID = 1
+	}
+
+	s.pullMu.Lock()
+	if s.pulling {
+		s.pullMu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"status": "already_running"})
 		return
 	}
-	acct, err := s.accounts.Add(req.Username, req.Password)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	s.pulling = true
+	s.pullMu.Unlock()
+	if s.store != nil {
+		s.store.SetPullPhase(status.PullRunning, "", 0)
+	}
+
+	go func() {
+		defer func() {
+			s.pullMu.Lock()
+			s.pulling = false
+			s.pullMu.Unlock()
+		}()
+		client := s.leyoo
+		if client == nil {
+			client = leyoo.NewClient("")
+		}
+		list, err := client.ListCatBySupplier(req.SupplierID)
+		if err != nil {
+			slog.Error("拉取店铺列表失败", "component", "web", "error", err)
+			if s.store != nil {
+				s.store.SetPullPhase(status.PullFailed, err.Error(), 0)
+			}
+			return
+		}
+		for _, remote := range list {
+			acct, _, upsertErr := s.accounts.UpsertFromRemote(
+				remote.Mobile, remote.ThirdPassword, remote.Name,
+				remote.ID, remote.SupplierID, remote.PlatformKey,
+			)
+			if upsertErr != nil {
+				slog.Warn("同步店铺失败", "component", "web", "mobile", remote.Mobile, "error", upsertErr)
+				continue
+			}
+			if err := auth.ImportFromHeader(acct.CookiePath, remote.Cookie, ".jiaoyimao.com"); err != nil {
+				_ = s.accounts.SetEnabled(acct.ID, false, "Cookie 导入失败: "+err.Error())
+				continue
+			}
+			cookies, _ := auth.LoadCookies(acct.CookiePath)
+			if !auth.IsCookieValid(cookies) {
+				_ = s.accounts.SetEnabled(acct.ID, false, "Cookie 无效")
+			}
+		}
+		s.refreshAccountStatus()
+		if s.store != nil {
+			s.store.SetPullPhase(status.PullSuccess, "", len(list))
+		}
+		slog.Info("店铺列表已同步", "component", "web", "supplier_id", req.SupplierID, "count", len(list))
+	}()
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+}
+
+func (s *Server) handleAccountEnable(w http.ResponseWriter, r *http.Request) {
+	s.setAccountEnabled(w, r, true)
+}
+
+func (s *Server) handleAccountDisable(w http.ResponseWriter, r *http.Request) {
+	s.setAccountEnabled(w, r, false)
+}
+
+func (s *Server) setAccountEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	acct, ok := s.lookupAccount(r)
+	if !ok {
+		http.Error(w, "账户不存在", http.StatusNotFound)
+		return
+	}
+	reason := ""
+	if !enabled {
+		reason = "手动禁用"
+	}
+	if err := s.accounts.SetEnabled(acct.ID, enabled, reason); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	s.refreshAccountStatus()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(accountToStatus(acct))
+	json.NewEncoder(w).Encode(accountToStatus(mustGetAccount(s.accounts, acct.ID)))
+}
+
+func mustGetAccount(store *accounts.Store, id string) accounts.Account {
+	a, _ := store.Get(id)
+	return a
 }
 
 func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
@@ -378,6 +476,7 @@ func accountToStatus(a accounts.Account) status.AccountStatus {
 	return status.AccountStatus{
 		ID:          a.ID,
 		Username:    a.Username,
+		ShopName:    a.ShopName,
 		Enabled:     a.Enabled,
 		LastStatus:  a.LastStatus,
 		LastError:   a.LastError,
@@ -430,4 +529,41 @@ func remClass(secs int64) string {
 		return "warn"
 	}
 	return "ok"
+}
+
+type historyDayGroup struct {
+	Label string
+	Date  string
+	Items []status.HistoryEntry
+}
+
+func groupHistory(entries []status.HistoryEntry) []historyDayGroup {
+	if len(entries) == 0 {
+		return nil
+	}
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+
+	order := make([]string, 0)
+	buckets := map[string][]status.HistoryEntry{}
+	for _, e := range entries {
+		d := e.At.In(now.Location()).Format("2006-01-02")
+		if _, ok := buckets[d]; !ok {
+			order = append(order, d)
+		}
+		buckets[d] = append(buckets[d], e)
+	}
+	out := make([]historyDayGroup, 0, len(order))
+	for _, d := range order {
+		label := d
+		switch d {
+		case today:
+			label = "今天 (" + d + ")"
+		case yesterday:
+			label = "昨天 (" + d + ")"
+		}
+		out = append(out, historyDayGroup{Label: label, Date: d, Items: buckets[d]})
+	}
+	return out
 }

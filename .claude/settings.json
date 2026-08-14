@@ -186,7 +186,13 @@
       "Bash(git commit -m 'feat: add Wails v3 desktop GUI app *)",
       "Bash(./bin/gui.exe)",
       "Bash(echo \"Exit code: $?\")",
-      "Bash(git commit -m 'fix: suppress console window and fix config path for double-click launch *)"
+      "Bash(git commit -m 'fix: suppress console window and fix config path for double-click launch *)",
+      "Bash(grep -n -B 2 -A 25 \"func \\(el \\\\*Element\\) Click\" \"/c/Users/林/go/pkg/mod/github.com/go-rod/rod@v0.116.2/element.go\" | head -50)",
+      "Read(//c/Users/林/go/pkg/mod/github.com/go-rod/rod@v0.116.2/**)",
+      "Bash(JYM_E2E=1 go test ./internal/auth/ -run TestLoginIntegration -v -timeout 120s)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(grep -iE \"^\\\\+.*\\(api[_-]?key|secret|token|password\\)\\\\s*[:=]\\\\s*['\\\\\"]?[A-Za-z0-9]{8,}\")"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",

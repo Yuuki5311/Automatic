@@ -18,6 +18,7 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/logger"
 	"github.com/example/jiaoyimao-scraper/internal/pipeline"
+	"github.com/example/jiaoyimao-scraper/internal/scrapehistory"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 	"github.com/example/jiaoyimao-scraper/internal/web"
 )
@@ -87,6 +88,21 @@ func main() {
 	}
 
 	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st, acctStore)
+	acctPath := accounts.PathFromCookie(cfg.JYM.CookiePath)
+	hist := scrapehistory.NewStore(scrapehistory.PathFromAccounts(acctPath))
+	if err := hist.Load(); err != nil {
+		slog.Warn("加载抓取历史失败", "error", err)
+	}
+	board.History = hist
+	syncHist := func() {
+		list := hist.List()
+		out := make([]status.HistoryEntry, len(list))
+		for i, e := range list {
+			out[i] = status.HistoryEntry{ID: e.ID, At: e.At, Account: e.Account, Status: e.Status, Error: e.Error}
+		}
+		st.SetScrapeHistory(out)
+	}
+	syncHist()
 	scrapeFn := func() {
 		if err := board.Run(); err != nil {
 			slog.Warn("抓取未执行", "error", err)

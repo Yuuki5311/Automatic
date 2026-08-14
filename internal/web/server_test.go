@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -130,6 +129,9 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 		{Title: "回收成功金额", Value: "9650.00", Unit: "元"},
 	}, nil)
 	store.RunFinished(nil, 1, 1, 0)
+	store.SetScrapeHistory([]status.HistoryEntry{
+		{Account: "13800000000", At: time.Now(), Status: "ok"},
+	})
 
 	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
@@ -146,9 +148,10 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 		"咨询量", "186", "回收成功金额", "9650.00", "元",
 		"立即抓取", "下次定时：每天 09:00",
 		"本阶段未启用",
-		"2026-08-12",
 		"/api/scrape",
-		"全部成功",
+		"最近抓取",
+		"13800000000",
+		"今天",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
@@ -156,10 +159,12 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 	}
 }
 
-func TestDashboardSkipCountsInBanner(t *testing.T) {
+func TestDashboardHistoryShowsSkippedAccount(t *testing.T) {
 	store := status.NewStore()
-	store.RunStarted()
-	store.RunFinished(nil, 1, 1, 1)
+	store.SetScrapeHistory([]status.HistoryEntry{
+		{Account: "good", At: time.Now(), Status: "ok"},
+		{Account: "bad", At: time.Now().Add(-time.Minute), Status: "skipped", Error: "cookie expired"},
+	})
 
 	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
@@ -169,19 +174,15 @@ func TestDashboardSkipCountsInBanner(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleIndex(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, "成功 1 / 跳过 1") {
-		t.Fatalf("expected skip counts in banner, got %q", body)
-	}
-	if strings.Contains(body, "全部成功") {
-		t.Fatal("partial skip must not show 全部成功")
+	for _, want := range []string{"good", "bad", "skipped", "cookie expired", "今天"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in %s", want, body)
+		}
 	}
 }
 
-func TestDashboardAllSkippedBanner(t *testing.T) {
+func TestDashboardHistoryEmpty(t *testing.T) {
 	store := status.NewStore()
-	store.RunStarted()
-	store.RunFinished(errors.New("全部账户跳过"), 0, 0, 2)
-
 	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -190,11 +191,8 @@ func TestDashboardAllSkippedBanner(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleIndex(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, "全部账户跳过") {
-		t.Fatalf("expected all-skipped error, got %q", body)
-	}
-	if strings.Contains(body, "全部成功") {
-		t.Fatal("all skipped must not show 全部成功")
+	if !strings.Contains(body, "暂无抓取记录") {
+		t.Fatalf("expected empty history, got %q", body)
 	}
 }
 
@@ -260,24 +258,31 @@ func TestDashboardAccountsSection(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"账户管理",
-		"账号",
-		"添加账户",
+		"手机号",
+		"拉取列表",
+		"supplier_id",
+		"最近抓取",
 		"13800000000",
 		"skippeduser",
 		"erruser",
 		"导入 Cookie",
 		"立即抓取",
 		"/api/scrape",
-		"/api/accounts",
-		"/api/accounts/",
+		"/api/accounts/pull",
 		"/cookies",
 		"/login",
 		"s.accounts",
-		"acct-username",
-		"acct-password",
+		"supplier-id",
+		"pullAccounts",
+		"renderHistory",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	for _, gone := range []string{"添加账户", "acct-username", "acct-password"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("dashboard should not contain %q", gone)
 		}
 	}
 	if !strings.Contains(body, "triggerScrape") {

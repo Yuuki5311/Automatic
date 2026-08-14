@@ -43,12 +43,33 @@ func TestBoardGameToFields(t *testing.T) {
 	}
 }
 
+func TestBoardGameToFieldsMapsQuoteMetric(t *testing.T) {
+	snap := models.BoardStatsSnapshot{Date: "2026-08-12", Account: "138", ScrapedAt: time.Now()}
+	g := models.GameBoardStats{
+		GameName: "原神",
+		Metrics: []models.BoardMetric{
+			{Title: "发起报价量", Value: "42"},
+			{Title: "咨询量", Value: "187"},
+		},
+	}
+	f := boardGameToFields(snap, g)
+	if f[boardFieldQuote] != float64(42) {
+		t.Fatalf("发起报价量 = %v", f[boardFieldQuote])
+	}
+	if f[boardFieldConsult] != float64(187) {
+		t.Fatalf("咨询量 = %v", f[boardFieldConsult])
+	}
+}
+
 func TestBoardGameToFieldsIncludesAccount(t *testing.T) {
-	snap := models.BoardStatsSnapshot{Date: "2026-08-12", Account: "13800000000", ScrapedAt: time.Now()}
+	snap := models.BoardStatsSnapshot{Date: "2026-08-12", Account: "13800000000", UID: "1727867117436205", ScrapedAt: time.Now()}
 	g := models.GameBoardStats{GameName: "原神"}
 	f := boardGameToFields(snap, g)
 	if f[boardFieldAccount] != "13800000000" {
 		t.Fatalf("%v", f)
+	}
+	if f[boardFieldUID] != "1727867117436205" {
+		t.Fatalf("uid=%v", f[boardFieldUID])
 	}
 }
 

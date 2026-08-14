@@ -1,5 +1,6 @@
 # 二进制文件
 bin/
+dist/
 *.exe
 *.exe~
 *.dll

@@ -12,6 +12,7 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/models"
+	"github.com/example/jiaoyimao-scraper/internal/scrapehistory"
 	"github.com/example/jiaoyimao-scraper/internal/statsstore"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
@@ -23,11 +24,14 @@ func TestBoardRun_SkipsFailedAccountContinues(t *testing.T) {
 	a1, _ := as.Add("bad", "x")
 	a2, _ := as.Add("good", "y")
 	st := status.NewStore()
+	hist := scrapehistory.NewStore(filepath.Join(dir, "scrape_history.json"))
+	_ = hist.Load()
 	var scraped []string
 	r := &BoardRun{
 		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: filepath.Join(dir, "stats")}},
 		Store:    st,
 		Accounts: as,
+		History:  hist,
 		NewContext: func(int) (context.Context, context.CancelFunc) {
 			return context.Background(), func() {}
 		},
@@ -66,6 +70,16 @@ func TestBoardRun_SkipsFailedAccountContinues(t *testing.T) {
 	}
 	if snap.LastRun.OkAccounts != 1 || snap.LastRun.SkippedAccounts != 1 {
 		t.Fatalf("ok=%d skipped=%d", snap.LastRun.OkAccounts, snap.LastRun.SkippedAccounts)
+	}
+	if len(snap.ScrapeHistory) != 2 {
+		t.Fatalf("history=%+v", snap.ScrapeHistory)
+	}
+	// newest first: good then bad
+	if snap.ScrapeHistory[0].Account != "good" || snap.ScrapeHistory[0].Status != "ok" {
+		t.Fatalf("hist0=%+v", snap.ScrapeHistory[0])
+	}
+	if snap.ScrapeHistory[1].Account != "bad" || snap.ScrapeHistory[1].Status != "skipped" {
+		t.Fatalf("hist1=%+v", snap.ScrapeHistory[1])
 	}
 }
 

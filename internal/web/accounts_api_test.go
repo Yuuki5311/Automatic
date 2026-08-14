@@ -8,13 +8,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/config"
+	"github.com/example/jiaoyimao-scraper/internal/leyoo"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
 
-func newAccountsAPI(t *testing.T) *httptest.Server {
+type accountsAPIEnv struct {
+	ts   *httptest.Server
+	acct *accounts.Store
+	srv  *Server
+}
+
+func newAccountsAPI(t *testing.T) accountsAPIEnv {
 	t.Helper()
 	acct := accounts.NewStore(filepath.Join(t.TempDir(), "accounts.json"))
 	if err := acct.Load(); err != nil {
@@ -26,27 +34,17 @@ func newAccountsAPI(t *testing.T) *httptest.Server {
 	}
 	ts := httptest.NewServer(s.srv.Handler)
 	t.Cleanup(ts.Close)
-	return ts
+	return accountsAPIEnv{ts: ts, acct: acct, srv: s}
 }
 
-func TestAccountsAddAndListHidesPassword(t *testing.T) {
-	ts := newAccountsAPI(t)
-
-	resp, err := http.Post(ts.URL+"/api/accounts", "application/json",
-		strings.NewReader(`{"username":"13800000000","password":"s3cret"}`))
+func TestAccountsListHidesPassword(t *testing.T) {
+	env := newAccountsAPI(t)
+	a, err := env.acct.Add("13800000000", "s3cret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST status=%d body=%s", resp.StatusCode, body)
-	}
-	if strings.Contains(string(body), "s3cret") {
-		t.Fatal("POST response leaked password")
-	}
 
-	listResp, err := http.Get(ts.URL + "/api/accounts")
+	listResp, err := http.Get(env.ts.URL + "/api/accounts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +65,7 @@ func TestAccountsAddAndListHidesPassword(t *testing.T) {
 		t.Fatalf("len=%d body=%s", len(list), listBody)
 	}
 	got := list[0]
-	if got.ID == "" || got.Username != "13800000000" || !got.Enabled || !got.HasPassword {
+	if got.ID != a.ID || got.Username != "13800000000" || !got.Enabled || !got.HasPassword {
 		t.Fatalf("item=%+v", got)
 	}
 	if got.CookieValid {
@@ -75,11 +73,24 @@ func TestAccountsAddAndListHidesPassword(t *testing.T) {
 	}
 }
 
-func TestAccountsDelete(t *testing.T) {
-	ts := newAccountsAPI(t)
-	id := postAccount(t, ts, "u1", "p1")
+func TestAccountsManualAddRemoved(t *testing.T) {
+	env := newAccountsAPI(t)
+	resp, err := http.Post(env.ts.URL+"/api/accounts", "application/json",
+		strings.NewReader(`{"username":"13800000000","password":"s3cret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("manual add should be removed, got %d", resp.StatusCode)
+	}
+}
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/accounts/"+id, nil)
+func TestAccountsDelete(t *testing.T) {
+	env := newAccountsAPI(t)
+	id := seedAccount(t, env, "u1", "p1")
+
+	req, _ := http.NewRequest(http.MethodDelete, env.ts.URL+"/api/accounts/"+id, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -89,18 +100,18 @@ func TestAccountsDelete(t *testing.T) {
 		t.Fatalf("DELETE status=%d", resp.StatusCode)
 	}
 
-	list := getAccounts(t, ts)
+	list := getAccounts(t, env.ts)
 	if len(list) != 0 {
 		t.Fatalf("after delete len=%d", len(list))
 	}
 }
 
 func TestAccountsImportCookiesSetsCookieValid(t *testing.T) {
-	ts := newAccountsAPI(t)
-	id := postAccount(t, ts, "cookieu", "pw")
+	env := newAccountsAPI(t)
+	id := seedAccount(t, env, "cookieu", "pw")
 
 	const cookiesJSON = `[{"name":"token","value":"abc","domain":".jiaoyimao.com","path":"/","expirationDate":1900000000,"httpOnly":true,"secure":true}]`
-	resp, err := http.Post(ts.URL+"/api/accounts/"+id+"/cookies", "application/json", strings.NewReader(cookiesJSON))
+	resp, err := http.Post(env.ts.URL+"/api/accounts/"+id+"/cookies", "application/json", strings.NewReader(cookiesJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,15 +121,15 @@ func TestAccountsImportCookiesSetsCookieValid(t *testing.T) {
 		t.Fatalf("import status=%d body=%s", resp.StatusCode, body)
 	}
 
-	list := getAccounts(t, ts)
+	list := getAccounts(t, env.ts)
 	if len(list) != 1 || !list[0].CookieValid {
 		t.Fatalf("cookie_valid not set: %+v", list)
 	}
 }
 
 func TestAccountLoginUnknownID(t *testing.T) {
-	ts := newAccountsAPI(t)
-	resp, err := http.Post(ts.URL+"/api/accounts/no-such-id/login", "application/json", nil)
+	env := newAccountsAPI(t)
+	resp, err := http.Post(env.ts.URL+"/api/accounts/no-such-id/login", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,10 +140,10 @@ func TestAccountLoginUnknownID(t *testing.T) {
 }
 
 func TestAccountLoginStarts(t *testing.T) {
-	ts := newAccountsAPI(t)
-	id := postAccount(t, ts, "loginuser", "pw")
+	env := newAccountsAPI(t)
+	id := seedAccount(t, env, "loginuser", "pw")
 
-	resp, err := http.Post(ts.URL+"/api/accounts/"+id+"/login", "application/json", nil)
+	resp, err := http.Post(env.ts.URL+"/api/accounts/"+id+"/login", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,9 +162,9 @@ func TestAccountLoginStarts(t *testing.T) {
 }
 
 func TestLegacyLoginRequiresExactlyOneAccount(t *testing.T) {
-	ts := newAccountsAPI(t)
+	env := newAccountsAPI(t)
 
-	resp, err := http.Post(ts.URL+"/api/login", "application/json", nil)
+	resp, err := http.Post(env.ts.URL+"/api/login", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,9 +174,9 @@ func TestLegacyLoginRequiresExactlyOneAccount(t *testing.T) {
 		t.Fatalf("0 accounts: status=%d body=%s", resp.StatusCode, body)
 	}
 
-	postAccount(t, ts, "a1", "p")
-	postAccount(t, ts, "a2", "p")
-	resp, err = http.Post(ts.URL+"/api/login", "application/json", nil)
+	seedAccount(t, env, "a1", "p")
+	seedAccount(t, env, "a2", "p")
+	resp, err = http.Post(env.ts.URL+"/api/login", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,10 +188,10 @@ func TestLegacyLoginRequiresExactlyOneAccount(t *testing.T) {
 }
 
 func TestLegacyLoginSingleAccountStarts(t *testing.T) {
-	ts := newAccountsAPI(t)
-	postAccount(t, ts, "only", "pw")
+	env := newAccountsAPI(t)
+	seedAccount(t, env, "only", "pw")
 
-	resp, err := http.Post(ts.URL+"/api/login", "application/json", nil)
+	resp, err := http.Post(env.ts.URL+"/api/login", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,10 +233,10 @@ func TestIndexRefreshesAccountsFromStore(t *testing.T) {
 }
 
 func TestAccountsAppearInStatusSnapshot(t *testing.T) {
-	ts := newAccountsAPI(t)
-	postAccount(t, ts, "snapu", "pw")
+	env := newAccountsAPI(t)
+	seedAccount(t, env, "snapu", "pw")
 
-	resp, err := http.Get(ts.URL + "/api/status")
+	resp, err := http.Get(env.ts.URL + "/api/status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,26 +253,101 @@ func TestAccountsAppearInStatusSnapshot(t *testing.T) {
 	}
 }
 
-func postAccount(t *testing.T, ts *httptest.Server, user, pass string) string {
-	t.Helper()
-	payload := `{"username":"` + user + `","password":"` + pass + `"}`
-	resp, err := http.Post(ts.URL+"/api/accounts", "application/json", strings.NewReader(payload))
+func TestAccountsEnableDisable(t *testing.T) {
+	env := newAccountsAPI(t)
+	id := seedAccount(t, env, "toggle", "pw")
+
+	resp, err := http.Post(env.ts.URL+"/api/accounts/"+id+"/disable", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("disable status=%d", resp.StatusCode)
+	}
+	list := getAccounts(t, env.ts)
+	if len(list) != 1 || list[0].Enabled {
+		t.Fatalf("want disabled: %+v", list)
+	}
+
+	resp, err = http.Post(env.ts.URL+"/api/accounts/"+id+"/enable", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	list = getAccounts(t, env.ts)
+	if len(list) != 1 || !list[0].Enabled {
+		t.Fatalf("want enabled: %+v", list)
+	}
+}
+
+func TestAccountsPullImportsCatCookies(t *testing.T) {
+	env := newAccountsAPI(t)
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"code":0,"msg":"ok","data":[
+			{"id":11,"name":"猫店","cookie":"ieu_member_uid=1; ieu_member_token=tok","mobile":"13900000001","platform_key":"cat","supplier_id":1,"third_password":"pw1"},
+			{"id":12,"name":"别的平台","cookie":"x=1","mobile":"13900000002","platform_key":"other","supplier_id":1,"third_password":"pw2"},
+			{"id":13,"name":"别的供应商","cookie":"ieu_member_uid=2","mobile":"13900000003","platform_key":"cat","supplier_id":2,"third_password":"pw3"}
+		]}`)
+	}))
+	t.Cleanup(mock.Close)
+	env.srv.leyoo = leyoo.NewClient(mock.URL)
+
+	resp, err := http.Post(env.ts.URL+"/api/accounts/pull", "application/json",
+		strings.NewReader(`{"supplier_id":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST add status=%d body=%s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("pull status=%d body=%s", resp.StatusCode, b)
 	}
-	var created status.AccountStatus
-	if err := json.Unmarshal(body, &created); err != nil {
-		t.Fatalf("created JSON: %v body=%s", err, body)
+
+	deadline := time.Now().Add(3 * time.Second)
+	var list []status.AccountStatus
+	for time.Now().Before(deadline) {
+		list = getAccounts(t, env.ts)
+		if len(list) == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if created.ID == "" {
-		t.Fatalf("missing id in %s", body)
+	if len(list) != 1 {
+		t.Fatalf("want 1 cat account, got %+v", list)
 	}
-	return created.ID
+	if list[0].Username != "13900000001" || list[0].ShopName != "猫店" {
+		t.Fatalf("account=%+v", list[0])
+	}
+	if !list[0].CookieValid {
+		t.Fatalf("cookie should be valid after pull: %+v", list[0])
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(env.ts.URL + "/api/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var snap status.Snapshot
+		_ = json.NewDecoder(resp.Body).Decode(&snap)
+		resp.Body.Close()
+		if snap.PullPhase == status.PullSuccess && snap.PullCount == 1 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("pull_phase should become success with count=1")
+}
+
+func seedAccount(t *testing.T, env accountsAPIEnv, user, pass string) string {
+	t.Helper()
+	a, err := env.acct.Add(user, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a.ID
 }
 
 func getAccounts(t *testing.T, ts *httptest.Server) []status.AccountStatus {

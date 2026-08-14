@@ -29,6 +29,7 @@ const (
 type AccountStatus struct {
 	ID          string    `json:"id"`
 	Username    string    `json:"username"`
+	ShopName    string    `json:"shop_name,omitempty"`
 	Enabled     bool      `json:"enabled"`
 	LastStatus  string    `json:"last_status"`
 	LastError   string    `json:"last_error,omitempty"`
@@ -43,12 +44,25 @@ type Snapshot struct {
 	Phase       Phase           `json:"phase"`
 	LoginPhase  LoginPhase      `json:"login_phase"` // 独立登录进度（与抓取 phase 解耦）
 	LoginError  string          `json:"login_error,omitempty"`
+	PullPhase   PullPhase       `json:"pull_phase"`
+	PullError   string          `json:"pull_error,omitempty"`
+	PullCount   int             `json:"pull_count,omitempty"`
 	Cookie      CookieInfo      `json:"cookie"`
 	CurrentRun  *RunInfo        `json:"current_run,omitempty"`
 	LastRun     *RunInfo        `json:"last_run,omitempty"`
-	Games       []GameResult    `json:"games"`
-	Accounts    []AccountStatus `json:"accounts,omitempty"`
-	ServerTime  time.Time       `json:"server_time"`
+	Games         []GameResult    `json:"games"`
+	Accounts      []AccountStatus `json:"accounts,omitempty"`
+	ScrapeHistory []HistoryEntry  `json:"scrape_history,omitempty"`
+	ServerTime    time.Time       `json:"server_time"`
+}
+
+// HistoryEntry 单账号抓取操作记录（供 UI 按日分组展示）。
+type HistoryEntry struct {
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Account string    `json:"account"`
+	Status  string    `json:"status"`
+	Error   string    `json:"error,omitempty"`
 }
 
 // LoginPhase UI 触发的登录进度。
@@ -59,6 +73,16 @@ const (
 	LoginRunning LoginPhase = "running"
 	LoginSuccess LoginPhase = "success"
 	LoginFailed  LoginPhase = "failed"
+)
+
+// PullPhase UI 触发的店铺列表拉取进度。
+type PullPhase string
+
+const (
+	PullIdle    PullPhase = "idle"
+	PullRunning PullPhase = "running"
+	PullSuccess PullPhase = "success"
+	PullFailed  PullPhase = "failed"
 )
 
 // CookieInfo Cookie 状态。
@@ -118,6 +142,7 @@ func NewStore() *Store {
 			DaemonState: DaemonStopped,
 			Phase:       PhaseIdle,
 			LoginPhase:  LoginIdle,
+			PullPhase:   PullIdle,
 		},
 	}
 }
@@ -128,6 +153,19 @@ func (s *Store) SetLoginPhase(p LoginPhase, errMsg string) {
 	defer s.mu.Unlock()
 	s.snap.LoginPhase = p
 	s.snap.LoginError = errMsg
+}
+
+// SetPullPhase 设置店铺列表拉取进度；count 仅在成功时有意义。
+func (s *Store) SetPullPhase(p PullPhase, errMsg string, count int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snap.PullPhase = p
+	s.snap.PullError = errMsg
+	if p == PullSuccess {
+		s.snap.PullCount = count
+	} else if p == PullRunning || p == PullIdle {
+		s.snap.PullCount = 0
+	}
 }
 
 // SetDaemonState 设置守护进程状态。
@@ -255,6 +293,19 @@ func (s *Store) SetAccounts(list []AccountStatus) {
 	s.snap.Accounts = accounts
 }
 
+// SetScrapeHistory 更新抓取操作历史（通常 newest-first）。
+func (s *Store) SetScrapeHistory(list []HistoryEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if list == nil {
+		s.snap.ScrapeHistory = nil
+		return
+	}
+	out := make([]HistoryEntry, len(list))
+	copy(out, list)
+	s.snap.ScrapeHistory = out
+}
+
 // RecordGameSync 更新某张表的飞书写入结果（按 tableKey 匹配）。
 func (s *Store) RecordGameSync(tableKey string, result FeishuSyncResult) {
 	s.mu.Lock()
@@ -297,6 +348,11 @@ func (s *Store) Snapshot() Snapshot {
 		accounts := make([]AccountStatus, len(snap.Accounts))
 		copy(accounts, snap.Accounts)
 		snap.Accounts = accounts
+	}
+	if snap.ScrapeHistory != nil {
+		hist := make([]HistoryEntry, len(snap.ScrapeHistory))
+		copy(hist, snap.ScrapeHistory)
+		snap.ScrapeHistory = hist
 	}
 	return snap
 }

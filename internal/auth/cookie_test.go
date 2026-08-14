@@ -181,6 +181,19 @@ func TestIsCookieValid_Valid(t *testing.T) {
 	}
 }
 
+func TestMemberUID(t *testing.T) {
+	if got := MemberUID(nil); got != "" {
+		t.Fatalf("nil => %q", got)
+	}
+	data := &models.CookieData{Cookies: []models.CookieEntry{
+		{Name: "token", Value: "x"},
+		{Name: "ieu_member_uid", Value: "1727867117436205"},
+	}}
+	if got := MemberUID(data); got != "1727867117436205" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 // ---------- ImportFromJSON ----------
 
 const editThisCookieSample = `[

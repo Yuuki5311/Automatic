@@ -83,7 +83,12 @@
   .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
   .acct-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .acct-import { margin-top: 8px; }
-  .acct-import textarea { height: 64px; }</style>
+  .acct-import textarea { height: 64px; }
+  .hist-day { margin-bottom: 14px; }
+  .hist-day:last-child { margin-bottom: 0; }
+  .hist-day-title { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  .history-table td { vertical-align: top; }
+</style>
 </head>
 <body>
 
@@ -121,25 +126,36 @@
 <div class="section">
   <h2><span class="icon">📋</span> 最近抓取</h2>
   {{if .CurrentRun}}
-  <div class="run-grid">
+  <div class="run-grid" style="margin-bottom:12px">
     <span class="label">状态</span><span class="val"><span class="spinner"></span> 进行中 — {{.Phase}}</span>
     <span class="label">开始</span><span class="val">{{.CurrentRun.StartedAt | fmtTime}}</span>
   </div>
-  {{else if .LastRun}}
-  <div class="run-grid">
-    <span class="label">统计日期</span><span class="val">{{if .LastRun.StatsDate}}{{.LastRun.StatsDate}}{{else}}-{{end}}</span>
-    <span class="label">开始</span><span class="val">{{.LastRun.StartedAt | fmtTime}}</span>
-    <span class="label">结束</span><span class="val">{{.LastRun.EndedAt | fmtTime}}</span>
-    <span class="label">耗时</span><span class="val">{{.LastRun.DurationSec | fmtDur}}</span>
-    <span class="label">状态</span><span class="val">
-      {{if .LastRun.Success}}{{if gt .LastRun.SkippedAccounts 0}}<span class="badge ok">成功 {{.LastRun.OkAccounts}} / 跳过 {{.LastRun.SkippedAccounts}}</span>
-      {{else}}<span class="badge ok">全部成功 · {{.LastRun.TotalOrders}} 个游戏</span>{{end}}
-      {{else}}<span class="badge err">{{.LastRun.Error}}</span>{{end}}
-    </span>
-  </div>
-  {{else}}
-  <div class="empty">暂无抓取记录</div>
   {{end}}
+  <div id="scrape-history">
+    {{$groups := groupHistory .ScrapeHistory}}
+    {{if $groups}}
+      {{range $groups}}
+      <div class="hist-day">
+        <div class="hist-day-title">{{.Label}}</div>
+        <table class="history-table">
+          <thead><tr><th>时间</th><th>账号</th><th>结果</th><th>说明</th></tr></thead>
+          <tbody>
+          {{range .Items}}
+            <tr>
+              <td class="mono">{{.At.Format "15:04:05"}}</td>
+              <td class="mono">{{.Account}}</td>
+              <td>{{if eq .Status "ok"}}<span class="badge ok">ok</span>{{else if eq .Status "skipped"}}<span class="badge warn">skipped</span>{{else}}<span class="badge err">{{.Status}}</span>{{end}}</td>
+              <td>{{if .Error}}{{.Error}}{{else}}-{{end}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+    {{else}}
+      <div class="empty">暂无抓取记录</div>
+    {{end}}
+  </div>
 </div>
 
 <!-- ====== 区域 3：各游戏数据（看板指标） ====== -->
@@ -196,24 +212,31 @@
 <!-- ====== 区域 5：账户管理 ====== -->
 <div class="section {{if eq .LoginPhase "failed"}}login-failed{{end}}">
   <h2><span class="icon">👤</span> 账户管理</h2>
-  <div class="hint">按账户导入 Cookie 或登录；立即抓取会对全部启用账户串行执行</div>
+  <div class="hint">从 leyoo 拉取交易猫店铺 Cookie；立即抓取仅对启用账户串行执行</div>
   <div id="acct-login-status">
     {{if eq .LoginPhase "running"}}<span class="msg info"><span class="spinner"></span>正在登录中（约 30-60 秒）…</span>
     {{else if eq .LoginPhase "success"}}<span class="msg ok">✅ 登录成功，Cookie 已更新</span>
     {{else if eq .LoginPhase "failed"}}<span class="msg err">❌ 登录失败: {{.LoginError}}</span>{{end}}
   </div>
+  <div class="form-row">
+    <label for="supplier-id">supplier_id</label>
+    <input type="number" id="supplier-id" value="1" min="1" style="width:88px">
+    <button class="btn btn-primary" onclick="pullAccounts()">拉取列表</button>
+  </div>
   <table>
     <thead>
-      <tr><th>账号</th><th>Cookie</th><th>状态</th><th>错误</th><th>操作</th></tr>
+      <tr><th>手机号</th><th>店铺</th><th>Cookie</th><th>状态</th><th>错误</th><th>操作</th></tr>
     </thead>
     <tbody id="accounts-tbody">
     {{if .Accounts}}
     {{range .Accounts}}
       <tr data-id="{{.ID}}">
         <td class="mono">{{.Username}}</td>
+        <td>{{if .ShopName}}{{.ShopName}}{{else}}-{{end}}</td>
         <td>{{if .CookieValid}}<span class="badge ok">有效</span>{{else}}<span class="badge err">无效</span>{{end}}</td>
         <td>
-          {{if eq .LastStatus "ok"}}<span class="badge ok">ok</span>
+          {{if not .Enabled}}<span class="badge warn">disabled</span>
+          {{else if eq .LastStatus "ok"}}<span class="badge ok">ok</span>
           {{else if eq .LastStatus "skipped"}}<span class="badge warn">skipped</span>
           {{else if eq .LastStatus "error"}}<span class="badge err">error</span>
           {{else}}<span class="badge info">{{if .LastStatus}}{{.LastStatus}}{{else}}-{{end}}</span>{{end}}
@@ -221,6 +244,11 @@
         <td>{{if .LastError}}{{.LastError}}{{else}}-{{end}}</td>
         <td>
           <div class="acct-actions">
+            {{if .Enabled}}
+            <button class="btn btn-sm btn-secondary" onclick="setAccountEnabled('{{.ID}}',false)">禁用</button>
+            {{else}}
+            <button class="btn btn-sm btn-primary" onclick="setAccountEnabled('{{.ID}}',true)">启用</button>
+            {{end}}
             <button class="btn btn-sm btn-secondary" onclick="toggleImport('{{.ID}}')">导入 Cookie</button>
             <button class="btn btn-sm btn-primary" onclick="loginAccount('{{.ID}}')">登录</button>
             <button class="btn btn-sm btn-danger" onclick="deleteAccount('{{.ID}}')">删除</button>
@@ -233,15 +261,10 @@
       </tr>
     {{end}}
     {{else}}
-      <tr><td colspan="5" class="empty">暂无账户，请在下方添加</td></tr>
+      <tr><td colspan="6" class="empty">暂无账户，请先拉取列表</td></tr>
     {{end}}
     </tbody>
   </table>
-  <div class="form-row">
-    <input type="text" id="acct-username" placeholder="用户名" autocomplete="username">
-    <input type="password" id="acct-password" placeholder="密码" autocomplete="current-password">
-    <button class="btn btn-primary" onclick="addAccount()">添加账户</button>
-  </div>
   <div id="acct-msg"></div>
 </div>
 
@@ -250,25 +273,30 @@
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function acctMsg(msg,cls){const el=document.getElementById('acct-msg');if(el)el.innerHTML='<span class="msg '+cls+'">'+msg+'</span>'}
-function statusBadge(st){
-  const v=st||'';
+function statusBadge(a){
+  if(a&&a.enabled===false)return '<span class="badge warn">disabled</span>';
+  const v=(a&&a.last_status)||'';
   if(!v)return '<span class="badge info">-</span>';
   if(v==='ok')return '<span class="badge ok">ok</span>';
-  if(v==='skipped')return '<span class="badge warn">skipped</span>';
+  if(v==='skipped'||v==='disabled')return '<span class="badge warn">'+esc(v)+'</span>';
   if(v==='error')return '<span class="badge err">error</span>';
   return '<span class="badge info">'+esc(v)+'</span>';
 }
 function renderAccounts(list){
   const tb=document.getElementById('accounts-tbody');if(!tb)return;
-  if(!list||!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">暂无账户，请在下方添加</td></tr>';return}
+  if(!list||!list.length){tb.innerHTML='<tr><td colspan="6" class="empty">暂无账户，请先拉取列表</td></tr>';return}
   tb.innerHTML=list.map(a=>{
     const id=esc(a.id);
+    const enBtn=a.enabled
+      ?'<button class="btn btn-sm btn-secondary" onclick="setAccountEnabled(\''+id+'\',false)">禁用</button>'
+      :'<button class="btn btn-sm btn-primary" onclick="setAccountEnabled(\''+id+'\',true)">启用</button>';
     return '<tr data-id="'+id+'">'+
       '<td class="mono">'+esc(a.username)+'</td>'+
+      '<td>'+(a.shop_name?esc(a.shop_name):'-')+'</td>'+
       '<td>'+(a.cookie_valid?'<span class="badge ok">有效</span>':'<span class="badge err">无效</span>')+'</td>'+
-      '<td>'+statusBadge(a.last_status)+'</td>'+
+      '<td>'+statusBadge(a)+'</td>'+
       '<td>'+(a.last_error?esc(a.last_error):'-')+'</td>'+
-      '<td><div class="acct-actions">'+
+      '<td><div class="acct-actions">'+enBtn+
         '<button class="btn btn-sm btn-secondary" onclick="toggleImport(\''+id+'\')">导入 Cookie</button>'+
         '<button class="btn btn-sm btn-primary" onclick="loginAccount(\''+id+'\')">登录</button>'+
         '<button class="btn btn-sm btn-danger" onclick="deleteAccount(\''+id+'\')">删除</button>'+
@@ -282,18 +310,43 @@ async function refreshAccounts(){
   try{const r=await fetch('/api/status');const s=await r.json();renderAccounts(s.accounts);return s}
   catch(e){acctMsg('刷新失败: '+e.message,'err');return null}
 }
-async function addAccount(){
-  const u=document.getElementById('acct-username').value.trim();
-  const p=document.getElementById('acct-password').value;
-  if(!u||!p){acctMsg('请填写用户名和密码','err');return}
-  acctMsg('<span class="spinner"></span>添加中…','info');
+async function pullAccounts(){
+  const sid=parseInt(document.getElementById('supplier-id').value,10)||1;
+  const btn=document.querySelector('button[onclick="pullAccounts()"]');
+  if(btn)btn.disabled=true;
+  acctMsg('<span class="spinner"></span>拉取中…','info');
   try{
-    const r=await fetch('/api/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-    const t=await r.text();
-    if(!r.ok){acctMsg('添加失败: '+t,'err');return}
-    document.getElementById('acct-username').value='';
-    document.getElementById('acct-password').value='';
-    acctMsg('已添加账户','ok');
+    const r=await fetch('/api/accounts/pull',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplier_id:sid})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){acctMsg('拉取失败: '+(d.error||r.status),'err');if(btn)btn.disabled=false;return}
+    if(d.status==='already_running'){acctMsg('拉取已在执行中','info');if(btn)btn.disabled=false;return}
+    const deadline=Date.now()+120000;
+    while(Date.now()<deadline){
+      await new Promise(res=>setTimeout(res,400));
+      const s=await refreshAccounts();
+      if(!s)continue;
+      if(s.pull_phase==='success'){
+        acctMsg('拉取完成（共 '+(s.pull_count||0)+' 个账户）','ok');
+        if(btn)btn.disabled=false;
+        return;
+      }
+      if(s.pull_phase==='failed'){
+        acctMsg('拉取失败: '+esc(s.pull_error||'未知错误'),'err');
+        if(btn)btn.disabled=false;
+        return;
+      }
+    }
+    acctMsg('拉取超时，请刷新后查看账户列表','err');
+  }catch(e){acctMsg('请求失败: '+e.message,'err')}
+  if(btn)btn.disabled=false;
+}
+async function setAccountEnabled(id,enabled){
+  const path=enabled?'enable':'disable';
+  acctMsg('<span class="spinner"></span>'+(enabled?'启用':'禁用')+'中…','info');
+  try{
+    const r=await fetch('/api/accounts/'+encodeURIComponent(id)+'/'+path,{method:'POST'});
+    if(!r.ok){acctMsg('操作失败: '+await r.text(),'err');return}
+    acctMsg(enabled?'已启用':'已禁用','ok');
     await refreshAccounts();
   }catch(e){acctMsg('请求失败: '+e.message,'err')}
 }
@@ -348,8 +401,47 @@ function scrapeKey(s){
     cur: !!(s&&s.current_run),
     ended: s&&s.last_run&&s.last_run.ended_at,
     date: s&&s.last_run&&s.last_run.stats_date,
-    games: (s&&s.games)||[]
+    games: (s&&s.games)||[],
+    hist: (s&&s.scrape_history)||[]
   });
+}
+function histStatusBadge(st){
+  if(st==='ok')return '<span class="badge ok">ok</span>';
+  if(st==='skipped')return '<span class="badge warn">skipped</span>';
+  return '<span class="badge err">'+esc(st||'-')+'</span>';
+}
+function groupHistoryJS(list){
+  if(!list||!list.length)return [];
+  const now=new Date();
+  const ymd=d=>{const x=new Date(d);const p=n=>String(n).padStart(2,'0');return x.getFullYear()+'-'+p(x.getMonth()+1)+'-'+p(x.getDate())};
+  const today=ymd(now);
+  const yest=ymd(new Date(now.getFullYear(),now.getMonth(),now.getDate()-1));
+  const order=[]; const buckets={};
+  list.forEach(e=>{
+    const d=ymd(e.at);
+    if(!buckets[d]){buckets[d]=[];order.push(d)}
+    buckets[d].push(e);
+  });
+  return order.map(d=>{
+    let label=d;
+    if(d===today)label='今天 ('+d+')';
+    else if(d===yest)label='昨天 ('+d+')';
+    return {label,items:buckets[d]};
+  });
+}
+function renderHistory(list){
+  const box=document.getElementById('scrape-history');if(!box)return;
+  const groups=groupHistoryJS(list);
+  if(!groups.length){box.innerHTML='<div class="empty">暂无抓取记录</div>';return}
+  box.innerHTML=groups.map(g=>{
+    const rows=g.items.map(e=>{
+      const t=e.at?new Date(e.at):null;
+      const hh=t?String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0'):'-';
+      return '<tr><td class="mono">'+hh+'</td><td class="mono">'+esc(e.account)+'</td><td>'+histStatusBadge(e.status)+'</td><td>'+(e.error?esc(e.error):'-')+'</td></tr>';
+    }).join('');
+    return '<div class="hist-day"><div class="hist-day-title">'+esc(g.label)+'</div>'+
+      '<table class="history-table"><thead><tr><th>时间</th><th>账号</th><th>结果</th><th>说明</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }).join('');
 }
 function renderLoginStatus(s){
   const ls=document.getElementById('acct-login-status');if(!ls)return;
@@ -360,17 +452,27 @@ function renderLoginStatus(s){
 const renderedScrape = {cur:{{if .CurrentRun}}true{{else}}false{{end}}, date:'{{if .LastRun}}{{.LastRun.StatsDate}}{{end}}', n:{{len .Games}}};
 let prevScrapeKey = null;
 let prevAccountsKey = null;
+let prevHistKey = null;
 (async function poll(){
   try{const r=await fetch('/api/status');const s=await r.json();
     const ak=JSON.stringify(s.accounts||[]);
     if(ak!==prevAccountsKey){prevAccountsKey=ak;renderAccounts(s.accounts)}
+    const hk=JSON.stringify(s.scrape_history||[]);
+    if(hk!==prevHistKey){prevHistKey=hk;renderHistory(s.scrape_history)}
     renderLoginStatus(s);
     const k=scrapeKey(s);
     if(prevScrapeKey===null){
       prevScrapeKey=k;
       const liveCur=!!s.current_run, liveDate=(s.last_run&&s.last_run.stats_date)||'', liveN=(s.games||[]).length;
       if(liveCur!==renderedScrape.cur||liveDate!==renderedScrape.date||liveN!==renderedScrape.n){location.reload();return;}
-    }else if(k!==prevScrapeKey){location.reload();return;}
+    }else if(k!==prevScrapeKey){
+      // history-only changes already handled; reload for games/current_run
+      const prev=JSON.parse(prevScrapeKey); const next=JSON.parse(k);
+      prevScrapeKey=k;
+      if(prev.cur!==next.cur||prev.ended!==next.ended||prev.date!==next.date||JSON.stringify(prev.games)!==JSON.stringify(next.games)){
+        location.reload();return;
+      }
+    }
     const db=document.getElementById('badge-daemon');db.textContent=s.daemon_state==='running'?'运行中':'已停止';db.className='badge '+(s.daemon_state==='running'?'on':'off');
     if(s.login_phase==='failed'&&!document.querySelector('.section.login-failed')){location.reload();return}
     if(s.login_phase==='success'||s.login_phase==='failed'){if('{{.LoginPhase}}'==='running'){location.reload();return}}

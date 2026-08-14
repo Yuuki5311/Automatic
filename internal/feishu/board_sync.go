@@ -16,9 +16,10 @@ import (
 const (
 	boardFieldDate         = "日期"
 	boardFieldAccount      = "账号"
+	boardFieldUID          = "UID"
 	boardFieldGame         = "游戏名称"
 	boardFieldConsult      = "咨询量"
-	boardFieldView         = "带看量"
+	boardFieldQuote        = "发起报价量"
 	boardFieldOrderCount   = "回收成功订单数"
 	boardFieldAmount       = "回收成功金额"
 	boardFieldSuccessRate  = "回收成功率"
@@ -44,9 +45,10 @@ type boardFieldDef struct {
 var boardFieldDefs = []boardFieldDef{
 	{boardFieldDate, fieldTypeDatetime},
 	{boardFieldAccount, fieldTypeText},
+	{boardFieldUID, fieldTypeText},
 	{boardFieldGame, fieldTypeText},
 	{boardFieldConsult, fieldTypeNumber},
-	{boardFieldView, fieldTypeNumber},
+	{boardFieldQuote, fieldTypeNumber},
 	{boardFieldOrderCount, fieldTypeNumber},
 	{boardFieldAmount, fieldTypeNumber},
 	{boardFieldSuccessRate, fieldTypeNumber},
@@ -60,7 +62,8 @@ var boardFieldDefs = []boardFieldDef{
 // metric title → 飞书列名
 var metricTitleToField = map[string]string{
 	"咨询量":       boardFieldConsult,
-	"带看量":       boardFieldView,
+	"发起报价量":     boardFieldQuote,
+	"带看量":       boardFieldQuote, // 旧列名别名，避免历史映射落空
 	"回收成功订单数":   boardFieldOrderCount,
 	"回收成功金额":    boardFieldAmount,
 	"回收成功率":     boardFieldSuccessRate,
@@ -202,6 +205,9 @@ func boardGameToFields(snap models.BoardStatsSnapshot, g models.GameBoardStats) 
 	fields := map[string]interface{}{
 		boardFieldGame:    g.GameName,
 		boardFieldAccount: snap.Account,
+	}
+	if snap.UID != "" {
+		fields[boardFieldUID] = snap.UID
 	}
 	if ms := dateStringToMillis(snap.Date); ms > 0 {
 		fields[boardFieldDate] = ms

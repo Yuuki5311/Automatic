@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/feishu"
 	"github.com/example/jiaoyimao-scraper/internal/models"
+	"github.com/example/jiaoyimao-scraper/internal/scrapehistory"
 	"github.com/example/jiaoyimao-scraper/internal/scraper"
 	"github.com/example/jiaoyimao-scraper/internal/statsstore"
 	"github.com/example/jiaoyimao-scraper/internal/status"
@@ -35,6 +37,7 @@ type BoardRun struct {
 	ScrapeAccount      func(ctx context.Context, acct accounts.Account, cookies *models.CookieData) (models.BoardStatsSnapshot, error)
 	Save               func(dir string, snap models.BoardStatsSnapshot) (string, error)
 	SyncFeishu         func(ctx context.Context, snap models.BoardStatsSnapshot) (newCount, updCount int, err error)
+	History            *scrapehistory.Store
 
 	mu sync.Mutex
 }
@@ -111,7 +114,7 @@ func (r *BoardRun) Run() error {
 		accts = r.Accounts.Enabled()
 	}
 	if len(accts) == 0 {
-		err := errors.New("没有可用账户，请先在 UI 添加账号")
+		err := errors.New("没有可用账户，请先在 UI 拉取列表")
 		slog.Error("没有可用账户", "component", "pipeline", "error", err)
 		r.Store.RunFinished(err, 0, 0, 0)
 		return nil
@@ -121,7 +124,12 @@ func (r *BoardRun) Run() error {
 	okAccounts := 0
 	skippedAccounts := 0
 	lastPath := ""
-	for _, acct := range accts {
+	for i, acct := range accts {
+		if i > 0 {
+			wait := time.Duration(5+rand.Intn(6)) * time.Second // 5–10s
+			slog.Info("账号间等待", "component", "pipeline", "wait", wait.String(), "next", acct.Username)
+			time.Sleep(wait)
+		}
 		n, path, skipped := r.runAccount(acct, timeout, statsDir)
 		if skipped {
 			skippedAccounts++
@@ -155,6 +163,10 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 	if err != nil {
 		slog.Error("Cookie准备失败", "component", "pipeline", "account", acct.Username, "error", err)
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", err.Error())
+		if isLoginPageFailure(err) {
+			_ = r.Accounts.SetEnabled(acct.ID, false, "自动登录后仍在登录页，已禁用")
+		}
+		r.recordHistory(acct.Username, "skipped", err.Error())
 		cancel()
 		return 0, "", true
 	}
@@ -164,10 +176,12 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 	r.Store.SetPhase(status.PhaseScraping)
 	snap, err := r.scrape(ctx, acct, cookies)
 	snap.Account = acct.Username
+	snap.UID = auth.MemberUID(cookies)
 	cancel()
 	if err != nil {
 		slog.Error("抓取数据失败", "component", "pipeline", "account", acct.Username, "error", err)
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", err.Error())
+		r.recordHistory(acct.Username, "skipped", err.Error())
 		return 0, "", true
 	}
 	recordBoardGames(r.Store, snap)
@@ -177,12 +191,14 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 
 	if r.Save == nil {
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", "save function not configured")
+		r.recordHistory(acct.Username, "skipped", "save function not configured")
 		return 0, "", true
 	}
 	path, saveErr := r.Save(statsDir, snap)
 	if saveErr != nil {
 		slog.Error("写入看板统计失败", "component", "pipeline", "account", acct.Username, "error", saveErr, "dir", statsDir)
 		_ = r.Accounts.UpdateStatus(acct.ID, "skipped", saveErr.Error())
+		r.recordHistory(acct.Username, "skipped", saveErr.Error())
 		return 0, "", true
 	}
 
@@ -195,12 +211,37 @@ func (r *BoardRun) runAccount(acct accounts.Account, timeout int, statsDir strin
 		}
 	}
 	_ = r.Accounts.UpdateStatus(acct.ID, "ok", "")
+	r.recordHistory(acct.Username, "ok", "")
 	for _, g := range snap.Games {
 		if g.Error == "" {
 			okGames++
 		}
 	}
 	return okGames, path, false
+}
+
+func (r *BoardRun) recordHistory(account, st, errMsg string) {
+	if r == nil || r.History == nil {
+		return
+	}
+	if err := r.History.Append(account, st, errMsg); err != nil {
+		slog.Warn("写入抓取历史失败", "component", "pipeline", "account", account, "error", err)
+	}
+	r.syncHistoryToStatus()
+}
+
+func (r *BoardRun) syncHistoryToStatus() {
+	if r == nil || r.Store == nil || r.History == nil {
+		return
+	}
+	list := r.History.List()
+	out := make([]status.HistoryEntry, len(list))
+	for i, e := range list {
+		out[i] = status.HistoryEntry{
+			ID: e.ID, At: e.At, Account: e.Account, Status: e.Status, Error: e.Error,
+		}
+	}
+	r.Store.SetScrapeHistory(out)
 }
 
 func (r *BoardRun) prep(ctx context.Context, acct accounts.Account) (*models.CookieData, error) {
@@ -215,6 +256,14 @@ func (r *BoardRun) scrape(ctx context.Context, acct accounts.Account, cookies *m
 		return r.ScrapeAccount(ctx, acct, cookies)
 	}
 	return models.BoardStatsSnapshot{}, errors.New("scrape not configured")
+}
+
+func isLoginPageFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "登录页") || strings.Contains(strings.ToLower(msg), "still on login")
 }
 
 func recordBoardGames(st *status.Store, snap models.BoardStatsSnapshot) {

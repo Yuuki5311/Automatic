@@ -148,6 +148,26 @@ func TestRunFinishedAllSkippedStoresError(t *testing.T) {
 	}
 }
 
+func TestSetScrapeHistoryAppearsInSnapshot(t *testing.T) {
+	s := NewStore()
+	at := time.Date(2026, 8, 14, 10, 5, 0, 0, time.Local)
+	s.SetScrapeHistory([]HistoryEntry{
+		{ID: "1", At: at, Account: "13800000000", Status: "ok"},
+		{ID: "2", At: at.Add(-time.Hour), Account: "13900000000", Status: "skipped", Error: "cookie expired"},
+	})
+	snap := s.Snapshot()
+	if len(snap.ScrapeHistory) != 2 {
+		t.Fatalf("len=%d", len(snap.ScrapeHistory))
+	}
+	if snap.ScrapeHistory[0].Account != "13800000000" || snap.ScrapeHistory[1].Error != "cookie expired" {
+		t.Fatalf("%+v", snap.ScrapeHistory)
+	}
+	snap.ScrapeHistory[0].Account = "mutated"
+	if s.Snapshot().ScrapeHistory[0].Account != "13800000000" {
+		t.Fatal("snapshot must deep-copy scrape history")
+	}
+}
+
 func TestSetAccountsAppearsInSnapshot(t *testing.T) {
 	s := NewStore()
 	runAt := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)

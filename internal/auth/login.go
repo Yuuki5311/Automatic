@@ -154,6 +154,9 @@ func (s *LoginService) RefreshIfNeeded(ctx context.Context, cfg *config.Config, 
 		return existing, nil
 	}
 	slog.Warn("Cookie无效或过期，执行自动登录", "component", "cookie")
+	if strings.TrimSpace(cfg.JYM.Password) == "" {
+		return nil, fmt.Errorf("Cookie 无效且无密码可自动登录")
+	}
 	newCookies, err := s.PerformLogin(ctx, cfg, captchaSolver)
 	if err != nil {
 		return nil, err
@@ -162,6 +165,28 @@ func (s *LoginService) RefreshIfNeeded(ctx context.Context, cfg *config.Config, 
 		slog.Error("保存Cookie失败", "component", "cookie", "error", err)
 	}
 	return newCookies, nil
+}
+
+// ProbeStillOnLoginPage 将 Cookie 注入浏览器并打开工作台，若仍在登录页返回 true。
+func (s *LoginService) ProbeStillOnLoginPage(ctx context.Context, cfg *config.Config, cookies *models.CookieData) (bool, error) {
+	if cfg == nil || cookies == nil {
+		return false, fmt.Errorf("参数无效")
+	}
+	base := cfg.JYM.BaseURL
+	if base == "" {
+		base = "https://merchant.jiaoyimao.com"
+	}
+	if err := browser.Navigate(ctx, base+"/workbench"); err != nil {
+		return false, err
+	}
+	_ = browser.SetCookies(ctx, cookies.Cookies)
+	if err := browser.Navigate(ctx, base+"/workbench"); err != nil {
+		return false, err
+	}
+	_ = browser.Sleep(ctx, 3*time.Second)
+	_ = browser.WaitReady(ctx)
+	u, _ := browser.Location(ctx)
+	return strings.Contains(u, "login"), nil
 }
 
 func (s *LoginService) waitAndSolveCaptcha(ctx context.Context, solver captcha.Solver) error {

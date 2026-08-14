@@ -16,14 +16,18 @@ import (
 )
 
 type Account struct {
-	ID         string    `json:"id"`
-	Username   string    `json:"username"`
-	Password   string    `json:"password"`
-	CookiePath string    `json:"cookie_path"`
-	Enabled    bool      `json:"enabled"`
-	LastStatus string    `json:"last_status"`
-	LastError  string    `json:"last_error"`
-	LastRunAt  time.Time `json:"last_run_at"`
+	ID           string    `json:"id"`
+	Username     string    `json:"username"` // 展示用 mobile
+	Password     string    `json:"password"`
+	CookiePath   string    `json:"cookie_path"`
+	Enabled      bool      `json:"enabled"`
+	LastStatus   string    `json:"last_status"`
+	LastError    string    `json:"last_error"`
+	LastRunAt    time.Time `json:"last_run_at"`
+	ExternalID   int       `json:"external_id,omitempty"` // leyoo 店铺 id
+	SupplierID   int       `json:"supplier_id,omitempty"`
+	ShopName     string    `json:"shop_name,omitempty"`
+	PlatformKey  string    `json:"platform_key,omitempty"`
 }
 
 type fileData struct {
@@ -188,6 +192,72 @@ func (s *Store) UpdateStatus(id, status, errMsg string) error {
 		}
 	}
 	return fmt.Errorf("账户不存在")
+}
+
+func (s *Store) SetEnabled(id string, enabled bool, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Accounts {
+		if s.data.Accounts[i].ID == id {
+			s.data.Accounts[i].Enabled = enabled
+			if reason != "" {
+				s.data.Accounts[i].LastError = reason
+			}
+			if !enabled {
+				s.data.Accounts[i].LastStatus = "disabled"
+			} else if s.data.Accounts[i].LastStatus == "disabled" {
+				s.data.Accounts[i].LastStatus = "idle"
+			}
+			s.data.Accounts[i].LastRunAt = time.Now()
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("账户不存在")
+}
+
+// UpsertFromRemote 按 mobile 更新或新增账户；已存在时保留 Enabled 状态。
+func (s *Store) UpsertFromRemote(mobile, password, shopName string, externalID, supplierID int, platformKey string) (Account, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mobile = strings.TrimSpace(mobile)
+	if mobile == "" {
+		return Account{}, false, fmt.Errorf("mobile 为空")
+	}
+	dir := filepath.Join(filepath.Dir(s.path), "cookies")
+	for i := range s.data.Accounts {
+		if s.data.Accounts[i].Username == mobile {
+			a := &s.data.Accounts[i]
+			a.Password = password
+			a.ShopName = shopName
+			a.ExternalID = externalID
+			a.SupplierID = supplierID
+			a.PlatformKey = platformKey
+			if a.CookiePath == "" {
+				a.CookiePath = filepath.Join(dir, SafeUsername(mobile)+".json")
+			}
+			if err := s.saveLocked(); err != nil {
+				return Account{}, false, err
+			}
+			return *a, false, nil
+		}
+	}
+	a := Account{
+		ID:          newID(),
+		Username:    mobile,
+		Password:    password,
+		CookiePath:  filepath.Join(dir, SafeUsername(mobile)+".json"),
+		Enabled:     true,
+		LastStatus:  "idle",
+		ExternalID:  externalID,
+		SupplierID:  supplierID,
+		ShopName:    shopName,
+		PlatformKey: platformKey,
+	}
+	s.data.Accounts = append(s.data.Accounts, a)
+	if err := s.saveLocked(); err != nil {
+		return Account{}, false, err
+	}
+	return a, true, nil
 }
 
 func (s *Store) Enabled() []Account {

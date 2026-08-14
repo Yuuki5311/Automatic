@@ -4,7 +4,9 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/models"
@@ -45,20 +47,64 @@ func IsCookieValid(data *models.CookieData) bool {
 	if data == nil || len(data.Cookies) == 0 {
 		return false
 	}
-	if time.Now().After(data.ExpiresAt) {
+	if !data.ExpiresAt.IsZero() && time.Now().After(data.ExpiresAt) {
 		return false
 	}
-	// 至少需要有登录态的关键Cookie
-	hasSessionCookie := false
+	// 至少需要有登录态的关键Cookie（含交易猫会员会话）
+	sessionNames := map[string]struct{}{
+		"_m_h5_tk": {}, "_m_h5_tk_enc": {}, "token": {}, "SESSION": {}, "jym_token": {},
+		"ieu_member_uid": {}, "ieu_member_token": {}, "jym_session_id": {}, "jym_session": {},
+	}
 	for _, c := range data.Cookies {
-		if c.Name == "_m_h5_tk" || c.Name == "_m_h5_tk_enc" || c.Name == "token" || c.Name == "SESSION" || c.Name == "jym_token" {
-			if c.Value != "" {
-				hasSessionCookie = true
-				break
-			}
+		if _, ok := sessionNames[c.Name]; ok && c.Value != "" {
+			return true
+		}
+		if strings.HasPrefix(c.Name, "ieu_member_") && c.Value != "" {
+			return true
 		}
 	}
-	return hasSessionCookie
+	return false
+}
+
+// ImportFromHeader 将 Cookie 请求头风格字符串（name=value; name2=value2）保存为本地 Cookie 文件。
+func ImportFromHeader(path, header string, domain string) error {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return fmt.Errorf("cookie 为空")
+	}
+	if domain == "" {
+		domain = ".jiaoyimao.com"
+	}
+	parts := strings.Split(header, ";")
+	entries := make([]models.CookieEntry, 0, len(parts))
+	expires := float64(time.Now().Add(30 * 24 * time.Hour).Unix())
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		name, val, ok := strings.Cut(p, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		entries = append(entries, models.CookieEntry{
+			Name:    name,
+			Value:   val,
+			Domain:  domain,
+			Path:    "/",
+			Expires: expires,
+			Secure:  true,
+		})
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("未能解析任何 cookie")
+	}
+	data := &models.CookieData{
+		Cookies:   entries,
+		ExpiresAt: time.Unix(int64(expires), 0),
+	}
+	return SaveCookies(path, data)
 }
 
 // ImportFromJSON 从浏览器导出的Cookie JSON（如EditThisCookie格式）导入
@@ -98,6 +144,19 @@ func ImportFromJSON(path string, browserJSON []byte) error {
 	data.ExpiresAt = time.Unix(int64(maxExpiry), 0)
 
 	return SaveCookies(path, data)
+}
+
+// MemberUID 从 Cookie 中读取交易猫会员 UID（ieu_member_uid）。
+func MemberUID(data *models.CookieData) string {
+	if data == nil {
+		return ""
+	}
+	for _, c := range data.Cookies {
+		if c.Name == "ieu_member_uid" && strings.TrimSpace(c.Value) != "" {
+			return strings.TrimSpace(c.Value)
+		}
+	}
+	return ""
 }
 
 func getDir(path string) string {
