@@ -38,7 +38,7 @@ func TestParseRecycleStatsJSON_GenshinEightMetrics(t *testing.T) {
 	if got.Metrics[0].Value != "186" || got.Metrics[3].Unit != "元" {
 		t.Fatalf("%+v", got.Metrics)
 	}
-	if got.GameName != "原神" || got.GameID != 1009609 || got.TimeKey != "yesterday" {
+	if got.GameName != "原神" || got.GameID != 1009609 || got.TimeKey != BoardStatsTimeKey {
 		t.Fatalf("metadata: %+v", got)
 	}
 	if got.Metrics[0].Title != "咨询量" || got.Metrics[0].Tips != "向您发起回收咨询的数量" {
@@ -49,6 +49,13 @@ func TestParseRecycleStatsJSON_GenshinEightMetrics(t *testing.T) {
 	}
 }
 
+func TestParseRecycleStatsJSON_NoPrivilege(t *testing.T) {
+	_, err := ParseRecycleStatsJSON("鸣潮", 2007615, []byte(`{"ret":["FAIL_BIZ_NO_PRIVILEGE::无权限"],"data":{}}`))
+	if !IsNoPrivilege(err) {
+		t.Fatalf("want privilege err, got %v", err)
+	}
+}
+
 func TestParseRecycleStatsJSON_FailRet(t *testing.T) {
 	_, err := ParseRecycleStatsJSON("火影忍者", 1003132, []byte(`{"ret":["FAIL_SYS_SESSION_EXPIRED::x"],"data":{}}`))
 	if err == nil {
@@ -56,6 +63,29 @@ func TestParseRecycleStatsJSON_FailRet(t *testing.T) {
 	}
 	if !errors.Is(err, errCookieExpired) {
 		t.Fatalf("session FAIL should map to errCookieExpired, got %v", err)
+	}
+}
+
+func TestParseRecycleStatsJSON_EmptyData(t *testing.T) {
+	_, err := ParseRecycleStatsJSON("鸣潮", 2007615, []byte(`{"ret":["SUCCESS::调用成功"],"data":{}}`))
+	if !errors.Is(err, errNoBoardData) {
+		t.Fatalf("want errNoBoardData, got %v", err)
+	}
+}
+
+func TestParseRecycleStatsJSON_SuccessButBadDataIsConfirmedFail(t *testing.T) {
+	_, err := ParseRecycleStatsJSON("原神", 1009609, []byte(`{"ret":["SUCCESS::调用成功"],"data":"not-json"}`))
+	if !IsConfirmedGameQueryFail(err) {
+		t.Fatalf("want confirmed query fail, got %v", err)
+	}
+}
+
+func TestGameNameToID_PeaceAndWangzhe(t *testing.T) {
+	if gameNameToID["和平精英"] != 1006473 {
+		t.Fatalf("和平精英 id=%d", gameNameToID["和平精英"])
+	}
+	if gameNameToID["王者荣耀"] != 1002416 {
+		t.Fatalf("王者荣耀 id=%d", gameNameToID["王者荣耀"])
 	}
 }
 

@@ -90,9 +90,6 @@ func (c *Client) ListCatBySupplier(supplierID int) ([]RemoteAccount, error) {
 		if !strings.EqualFold(strings.TrimSpace(a.PlatformKey), "cat") {
 			continue
 		}
-		if strings.TrimSpace(a.Mobile) == "" {
-			continue
-		}
 		out = append(out, a)
 	}
 	return out, nil

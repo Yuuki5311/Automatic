@@ -21,11 +21,13 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/example/jiaoyimao-scraper/internal/accounts"
+	"github.com/example/jiaoyimao-scraper/internal/accountsync"
 	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/logger"
+	"github.com/example/jiaoyimao-scraper/internal/leyoo"
 	"github.com/example/jiaoyimao-scraper/internal/pipeline"
 	"github.com/example/jiaoyimao-scraper/internal/scrapehistory"
 	"github.com/example/jiaoyimao-scraper/internal/status"
@@ -81,6 +83,13 @@ func main() {
 		slog.Warn("迁移遗留账户失败", "component", "main", "error", err)
 	}
 
+	slog.Info("启动前同步店铺 Cookie…", "component", "main")
+	if n, err := accountsync.SyncExistingSuppliers(acctStore, leyoo.NewClient(""), accountsync.CryptoFromConfig(cfg)); err != nil {
+		slog.Warn("启动同步店铺列表未完全成功", "component", "main", "kept", n, "error", err)
+	} else {
+		slog.Info("启动同步店铺 Cookie 完成", "component", "main", "kept", n)
+	}
+
 	st := status.NewStore()
 	board := pipeline.NewBoardRun(cfg, browserMgr, loginSvc, captchaSolver, st, acctStore)
 	hist := scrapehistory.NewStore(scrapehistory.PathFromAccounts(accounts.PathFromCookie(cfg.JYM.CookiePath)))
@@ -108,6 +117,7 @@ func main() {
 			slog.Error("初始化Web仪表盘失败", "component", "main", "error", err)
 		} else {
 			webSrv.SetScrapeFunc(runScrape)
+			webSrv.SetHistoryStore(hist)
 			go func() {
 				slog.Info("Web仪表盘已启动", "component", "main", "addr", cfg.Web.Addr)
 				if err := webSrv.ListenAndServe(cfg.Web.Addr); err != nil {

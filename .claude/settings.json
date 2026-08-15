@@ -194,7 +194,19 @@
       "Bash(gh auth *)",
       "Bash(grep -iE \"^\\\\+.*\\(api[_-]?key|secret|token|password\\)\\\\s*[:=]\\\\s*['\\\\\"]?[A-Za-z0-9]{8,}\")",
       "Bash(git push *)",
-      "Bash(git fetch *)"
+      "Bash(git fetch *)",
+      "Bash(echo \"BUILD_ROOT_EXIT=$?\")",
+      "Bash(echo \"VET_ROOT_EXIT=$?\")",
+      "Bash(echo \"BUILD_BCS_EXIT=$?\")",
+      "Bash(echo \"VET_BCS_EXIT=$?\")",
+      "Bash(curl -s -m 5 http://127.0.0.1:8080/api/status)",
+      "Bash(curl -s -m 5 -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8080/api/accounts)",
+      "Bash(tasklist //FI \"IMAGENAME eq jiaoyimao-scraper.exe\")",
+      "Bash(tasklist)",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -m 10 http://127.0.0.1:53172/api/accounts)",
+      "Bash(curl -s -m 60 \"https://open.leyoo888.com/open/ck_account/list\" -o /tmp/leyoo_list.json)",
+      "Bash(python -c ' *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",

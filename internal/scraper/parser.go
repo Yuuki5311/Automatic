@@ -255,6 +255,10 @@ func normalizeGameName(raw string) string {
 		"三角洲行动":      "三角洲行动",
 		"deltaforce": "三角洲行动",
 		"三角洲":        "三角洲行动",
+		"和平精英":       "和平精英",
+		"peace":      "和平精英",
+		"王者荣耀":       "王者荣耀",
+		"wangzhe":    "王者荣耀",
 	}
 	if standard, ok := mapping[raw]; ok {
 		return standard

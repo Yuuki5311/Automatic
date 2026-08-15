@@ -60,7 +60,8 @@ type GameBoardStats struct {
 type BoardStatsSnapshot struct {
 	Date      string           `json:"date"`
 	Account   string           `json:"account,omitempty"`
-	UID       string           `json:"uid,omitempty"` // ieu_member_uid
+	ShopName  string           `json:"shop_name,omitempty"` // leyoo 店铺名
+	UID       string           `json:"uid,omitempty"`       // ieu_member_uid
 	ScrapedAt time.Time        `json:"scraped_at"`
 	Games     []GameBoardStats `json:"games"`
 }

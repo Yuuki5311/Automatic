@@ -88,6 +88,41 @@
   .hist-day:last-child { margin-bottom: 0; }
   .hist-day-title { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
   .history-table td { vertical-align: top; }
+  #scrape-history {
+    max-height: 280px;
+    overflow-y: auto;
+    padding-right: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: #fafafa;
+  }
+  #scrape-history::-webkit-scrollbar { width: 8px; }
+  #scrape-history::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+  #scrape-history::-webkit-scrollbar-track { background: transparent; }
+  tr.hist-fail { background: #fef2f2; }
+  tr.hist-fail td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+  a.acct-link { color: var(--blue); text-decoration: none; cursor: pointer; font-weight: 600; }
+  a.acct-link:hover { text-decoration: underline; }
+  .modal-mask {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    z-index: 1000; align-items: center; justify-content: center;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 12px; padding: 20px; width: min(480px, 92vw);
+    max-height: 90vh; overflow-y: auto; box-shadow: 0 12px 40px rgba(0,0,0,.18);
+  }
+  .modal h3 { font-size: 16px; margin-bottom: 12px; }
+  .modal .field { margin-bottom: 10px; }
+  .modal .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal .field input, .modal .field select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px;
+  }
+  .modal .field input[readonly] { background: #f5f5f5; color: #555; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  @media (max-width: 520px) { .metrics-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -134,17 +169,17 @@
   <div id="scrape-history">
     {{$groups := groupHistory .ScrapeHistory}}
     {{if $groups}}
-      {{range $groups}}
+      {{range $g := $groups}}
       <div class="hist-day">
-        <div class="hist-day-title">{{.Label}}</div>
+        <div class="hist-day-title">{{$g.Label}}</div>
         <table class="history-table">
           <thead><tr><th>时间</th><th>账号</th><th>结果</th><th>说明</th></tr></thead>
           <tbody>
-          {{range .Items}}
-            <tr>
+          {{range $g.Items}}
+            <tr class="{{if or (eq .Status "failed") (eq .Status "skipped") (and (ne .Status "ok") (ne .Status "manual"))}}hist-fail{{end}}">
               <td class="mono">{{.At.Format "15:04:05"}}</td>
-              <td class="mono">{{.Account}}</td>
-              <td>{{if eq .Status "ok"}}<span class="badge ok">ok</span>{{else if eq .Status "skipped"}}<span class="badge warn">skipped</span>{{else}}<span class="badge err">{{.Status}}</span>{{end}}</td>
+              <td class="mono"><a class="acct-link" href="javascript:void(0)" onclick="openManualSupplement('{{$g.Date}}','{{.Account}}')">{{.Account}}</a></td>
+              <td>{{if eq .Status "ok"}}<span class="badge ok">ok</span>{{else if eq .Status "manual"}}<span class="badge info">manual</span>{{else if eq .Status "failed"}}<span class="badge err">失败</span>{{else if eq .Status "skipped"}}<span class="badge warn">skipped</span>{{else}}<span class="badge err">{{.Status}}</span>{{end}}</td>
               <td>{{if .Error}}{{.Error}}{{else}}-{{end}}</td>
             </tr>
           {{end}}
@@ -204,8 +239,12 @@
       {{if .CurrentRun}}disabled{{end}}>
       {{if .CurrentRun}}抓取中…{{else}}立即抓取{{end}}
     </button>
-    <span class="cron-hint">下次定时：每天 09:00</span>
+    <label for="schedule-time" style="margin-left:12px;color:var(--muted);font-size:13px">每天</label>
+    <input type="time" id="schedule-time" value="{{if .ScheduleTime}}{{.ScheduleTime}}{{else}}09:00{{end}}" style="margin-left:6px">
+    <button class="btn" onclick="saveSchedule()">保存定时</button>
+    <span class="cron-hint" id="cron-hint">下次定时：{{if .ScheduleLabel}}{{.ScheduleLabel}}{{else}}每天 09:00{{end}}</span>
   </div>
+  <div id="schedule-status"></div>
   <div id="scrape-status"></div>
 </div>
 
@@ -269,6 +308,22 @@
 </div>
 
 <div class="footer">自动刷新 · 每 5 秒 · 服务器时间: {{.ServerTime | fmtTime}}</div>
+
+<div class="modal-mask" id="manual-modal" onclick="if(event.target===this)closeManualSupplement()">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3>手工补充飞书数据</h3>
+    <div class="field"><label>日期</label><input id="manual-date" readonly></div>
+    <div class="field"><label>账号</label><input id="manual-account" readonly></div>
+    <div class="field"><label>游戏</label><select id="manual-game"></select></div>
+    <div class="hint">指标可留空；提交后整行覆盖（空字段会清空原值）</div>
+    <div class="metrics-grid" id="manual-metrics"></div>
+    <div id="manual-msg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" type="button" onclick="closeManualSupplement()">取消</button>
+      <button class="btn btn-primary" type="button" onclick="submitManualSupplement()">提交到飞书</button>
+    </div>
+  </div>
+</div>
 
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -396,6 +451,22 @@ async function triggerScrape(){
     else if(d.status==='started'){if(st)st.innerHTML='<span class="msg info"><span class="spinner"></span>抓取进行中…</span>';setTimeout(()=>location.reload(),1200);}
     else {if(st)st.innerHTML='<span class="msg err">'+((d&&d.status)||'触发失败')+'</span>';if(b){b.disabled=false;b.textContent='立即抓取';}}}
   catch(e){if(st)st.innerHTML='<span class="msg err">请求失败: '+e.message+'</span>';if(b){b.disabled=false;b.textContent='立即抓取';}}}
+async function saveSchedule(){
+  const inp=document.getElementById('schedule-time');
+  const st=document.getElementById('schedule-status');
+  const t=(inp&&inp.value)||'';
+  if(!t){if(st)st.innerHTML='<span class="msg err">请选择时间</span>';return}
+  if(st)st.innerHTML='<span class="msg info">保存中…</span>';
+  try{
+    const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({time:t})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){if(st)st.innerHTML='<span class="msg err">'+(d.error||r.status)+'</span>';return}
+    const hint=document.getElementById('cron-hint');
+    if(hint)hint.textContent='下次定时：'+(d.label||('每天 '+d.time));
+    if(inp&&d.time)inp.value=d.time;
+    if(st)st.innerHTML='<span class="msg ok">已设置为 '+(d.label||d.time)+'</span>';
+  }catch(e){if(st)st.innerHTML='<span class="msg err">请求失败: '+e.message+'</span>'}
+}
 function scrapeKey(s){
   return JSON.stringify({
     cur: !!(s&&s.current_run),
@@ -404,11 +475,6 @@ function scrapeKey(s){
     games: (s&&s.games)||[],
     hist: (s&&s.scrape_history)||[]
   });
-}
-function histStatusBadge(st){
-  if(st==='ok')return '<span class="badge ok">ok</span>';
-  if(st==='skipped')return '<span class="badge warn">skipped</span>';
-  return '<span class="badge err">'+esc(st||'-')+'</span>';
 }
 function groupHistoryJS(list){
   if(!list||!list.length)return [];
@@ -426,8 +492,15 @@ function groupHistoryJS(list){
     let label=d;
     if(d===today)label='今天 ('+d+')';
     else if(d===yest)label='昨天 ('+d+')';
-    return {label,items:buckets[d]};
+    return {label,date:d,items:buckets[d]};
   });
+}
+function histStatusBadge(st){
+  if(st==='ok')return '<span class="badge ok">ok</span>';
+  if(st==='manual')return '<span class="badge info">manual</span>';
+  if(st==='skipped')return '<span class="badge warn">skipped</span>';
+  if(st==='failed')return '<span class="badge err">失败</span>';
+  return '<span class="badge err">'+esc(st||'-')+'</span>';
 }
 function renderHistory(list){
   const box=document.getElementById('scrape-history');if(!box)return;
@@ -437,11 +510,72 @@ function renderHistory(list){
     const rows=g.items.map(e=>{
       const t=e.at?new Date(e.at):null;
       const hh=t?String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0'):'-';
-      return '<tr><td class="mono">'+hh+'</td><td class="mono">'+esc(e.account)+'</td><td>'+histStatusBadge(e.status)+'</td><td>'+(e.error?esc(e.error):'-')+'</td></tr>';
+      const fail=(e.status==='failed'||e.status==='skipped'||(e.status&&e.status!=='ok'&&e.status!=='manual'))?'hist-fail':'';
+      const acct='<a class="acct-link" href="javascript:void(0)" onclick=\'openManualSupplement('+JSON.stringify(g.date)+','+JSON.stringify(e.account||'')+')\'>'+esc(e.account)+'</a>';
+      return '<tr class="'+fail+'"><td class="mono">'+hh+'</td><td class="mono">'+acct+'</td><td>'+histStatusBadge(e.status)+'</td><td>'+(e.error?esc(e.error):'-')+'</td></tr>';
     }).join('');
     return '<div class="hist-day"><div class="hist-day-title">'+esc(g.label)+'</div>'+
       '<table class="history-table"><thead><tr><th>时间</th><th>账号</th><th>结果</th><th>说明</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   }).join('');
+}
+let manualMetricFields=[];
+let manualGames=[];
+async function ensureManualMeta(){
+  if(!manualGames.length){
+    const r=await fetch('/api/board/games'); const d=await r.json();
+    manualGames=d.games||[];
+  }
+  if(!manualMetricFields.length){
+    const r=await fetch('/api/board/metric-fields'); const d=await r.json();
+    manualMetricFields=d.fields||[];
+  }
+}
+async function openManualSupplement(date, account){
+  try{
+    await ensureManualMeta();
+  }catch(e){alert('加载游戏列表失败: '+e.message);return}
+  const mask=document.getElementById('manual-modal');
+  document.getElementById('manual-date').value=date||'';
+  document.getElementById('manual-account').value=account||'';
+  const sel=document.getElementById('manual-game');
+  sel.innerHTML=manualGames.map(g=>'<option value="'+esc(g)+'">'+esc(g)+'</option>').join('');
+  const grid=document.getElementById('manual-metrics');
+  grid.innerHTML=manualMetricFields.map(f=>{
+    const id='mf-'+f;
+    return '<div class="field"><label for="'+id+'">'+esc(f)+'</label><input type="number" step="any" id="'+id+'" data-field="'+esc(f)+'" placeholder="可留空"></div>';
+  }).join('');
+  document.getElementById('manual-msg').innerHTML='';
+  mask.classList.add('open');
+}
+function closeManualSupplement(){
+  const mask=document.getElementById('manual-modal');
+  if(mask)mask.classList.remove('open');
+}
+async function submitManualSupplement(){
+  const date=document.getElementById('manual-date').value.trim();
+  const account=document.getElementById('manual-account').value.trim();
+  const game=document.getElementById('manual-game').value;
+  const msg=document.getElementById('manual-msg');
+  const metrics={};
+  document.querySelectorAll('#manual-metrics input[data-field]').forEach(inp=>{
+    const v=inp.value.trim();
+    if(v===''){metrics[inp.dataset.field]=null;return}
+    const n=Number(v);
+    if(Number.isNaN(n)){metrics.__bad=inp.dataset.field;return}
+    metrics[inp.dataset.field]=n;
+  });
+  if(metrics.__bad){msg.innerHTML='<span class="msg err">指标须为数字: '+esc(metrics.__bad)+'</span>';delete metrics.__bad;return}
+  delete metrics.__bad;
+  msg.innerHTML='<span class="msg info"><span class="spinner"></span>提交中…</span>';
+  try{
+    const r=await fetch('/api/board/manual',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({date,account,game,metrics})});
+    const t=await r.text();
+    let d={}; try{d=JSON.parse(t)}catch(_){}
+    if(!r.ok){msg.innerHTML='<span class="msg err">'+(d.error||t||r.status)+'</span>';return}
+    msg.innerHTML='<span class="msg ok">已'+(d.action==='updated'?'更新':'新增')+'飞书记录</span>';
+    setTimeout(()=>{closeManualSupplement();prevHistKey=null;},800);
+  }catch(e){msg.innerHTML='<span class="msg err">请求失败: '+esc(e.message)+'</span>'}
 }
 function renderLoginStatus(s){
   const ls=document.getElementById('acct-login-status');if(!ls)return;
@@ -474,6 +608,10 @@ let prevHistKey = null;
       }
     }
     const db=document.getElementById('badge-daemon');db.textContent=s.daemon_state==='running'?'运行中':'已停止';db.className='badge '+(s.daemon_state==='running'?'on':'off');
+    const hint=document.getElementById('cron-hint');
+    if(hint&&s.schedule_label)hint.textContent='下次定时：'+s.schedule_label;
+    const tinp=document.getElementById('schedule-time');
+    if(tinp&&s.schedule_time&&document.activeElement!==tinp)tinp.value=s.schedule_time;
     if(s.login_phase==='failed'&&!document.querySelector('.section.login-failed')){location.reload();return}
     if(s.login_phase==='success'||s.login_phase==='failed'){if('{{.LoginPhase}}'==='running'){location.reload();return}}
     const el=document.querySelector('.ttl');if(el&&s.cookie&&s.cookie.remaining_seconds!==undefined){

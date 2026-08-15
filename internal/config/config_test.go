@@ -256,8 +256,8 @@ func TestLoadTestConfigFile(t *testing.T) {
 	if cfg.Scraper.Mode != "auto" {
 		t.Errorf("Scraper.Mode = %q, want auto", cfg.Scraper.Mode)
 	}
-	if len(cfg.Scraper.Games) != 6 {
-		t.Errorf("Scraper.Games length = %d, want 6", len(cfg.Scraper.Games))
+	if len(cfg.Scraper.Games) != 8 {
+		t.Errorf("Scraper.Games length = %d, want 8", len(cfg.Scraper.Games))
 	}
 
 	// 安全校验：表格ID必须全部是 tblTEST* 前缀，杜绝误连生产表格

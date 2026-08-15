@@ -28,6 +28,9 @@ func TestStartDaemonCron_SetsRunningAndAcceptsDailyNine(t *testing.T) {
 	if called {
 		t.Fatal("cron must not scrape on start")
 	}
+	if got := st.Snapshot().ScheduleLabel; got != "每天 09:00" {
+		t.Fatalf("ScheduleLabel=%q", got)
+	}
 }
 
 func TestStartLocalDashboardServesOnKeptListener(t *testing.T) {

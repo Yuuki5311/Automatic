@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/jiaoyimao-scraper/credentialcrypto"
 	"github.com/example/jiaoyimao-scraper/internal/accounts"
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/leyoo"
@@ -283,13 +285,28 @@ func TestAccountsEnableDisable(t *testing.T) {
 
 func TestAccountsPullImportsCatCookies(t *testing.T) {
 	env := newAccountsAPI(t)
+	env.srv.cfg = &config.Config{Credential: config.CredentialConfig{AESKey: "0123456789abcdef"}}
+	cryptoClient, err := credentialcrypto.New([]byte("0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encPhone, err := cryptoClient.Encrypt("13900000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encPass, err := cryptoClient.Encrypt("pw1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"code":0,"msg":"ok","data":[
-			{"id":11,"name":"猫店","cookie":"ieu_member_uid=1; ieu_member_token=tok","mobile":"13900000001","platform_key":"cat","supplier_id":1,"third_password":"pw1"},
+		payload := fmt.Sprintf(`{"code":0,"msg":"ok","data":[
+			{"id":11,"name":"猫店","cookie":"ieu_member_uid=1; ieu_member_token=tok","mobile":"","platform_key":"cat","supplier_id":1,"third_account":%q,"third_password":%q},
 			{"id":12,"name":"别的平台","cookie":"x=1","mobile":"13900000002","platform_key":"other","supplier_id":1,"third_password":"pw2"},
 			{"id":13,"name":"别的供应商","cookie":"ieu_member_uid=2","mobile":"13900000003","platform_key":"cat","supplier_id":2,"third_password":"pw3"}
-		]}`)
+		]}`, encPhone, encPass)
+		io.WriteString(w, payload)
 	}))
 	t.Cleanup(mock.Close)
 	env.srv.leyoo = leyoo.NewClient(mock.URL)
@@ -318,7 +335,7 @@ func TestAccountsPullImportsCatCookies(t *testing.T) {
 		t.Fatalf("want 1 cat account, got %+v", list)
 	}
 	if list[0].Username != "13900000001" || list[0].ShopName != "猫店" {
-		t.Fatalf("account=%+v", list[0])
+		t.Fatalf("account=%+v (want decrypted third_account as username)", list[0])
 	}
 	if !list[0].CookieValid {
 		t.Fatalf("cookie should be valid after pull: %+v", list[0])

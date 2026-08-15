@@ -128,6 +128,37 @@ func (s *Store) Get(id string) (Account, bool) {
 	return Account{}, false
 }
 
+// FindByExternalID 按 leyoo 店铺 id 查找账户。
+func (s *Store) FindByExternalID(externalID int) (Account, bool) {
+	if externalID <= 0 {
+		return Account{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.data.Accounts {
+		if a.ExternalID == externalID {
+			return a, true
+		}
+	}
+	return Account{}, false
+}
+
+// FindByUsername 按用户名（手机号）精确查找。
+func (s *Store) FindByUsername(username string) (Account, bool) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return Account{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.data.Accounts {
+		if a.Username == username {
+			return a, true
+		}
+	}
+	return Account{}, false
+}
+
 func (s *Store) Add(username, password string) (Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -215,37 +246,86 @@ func (s *Store) SetEnabled(id string, enabled bool, reason string) error {
 	return fmt.Errorf("账户不存在")
 }
 
-// UpsertFromRemote 按 mobile 更新或新增账户；已存在时保留 Enabled 状态。
-func (s *Store) UpsertFromRemote(mobile, password, shopName string, externalID, supplierID int, platformKey string) (Account, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	mobile = strings.TrimSpace(mobile)
-	if mobile == "" {
-		return Account{}, false, fmt.Errorf("mobile 为空")
+// IsCNMobile 判断是否为 11 位纯数字手机号。
+func IsCNMobile(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) != 11 {
+		return false
 	}
-	dir := filepath.Join(filepath.Dir(s.path), "cookies")
-	for i := range s.data.Accounts {
-		if s.data.Accounts[i].Username == mobile {
-			a := &s.data.Accounts[i]
-			a.Password = password
-			a.ShopName = shopName
-			a.ExternalID = externalID
-			a.SupplierID = supplierID
-			a.PlatformKey = platformKey
-			if a.CookiePath == "" {
-				a.CookiePath = filepath.Join(dir, SafeUsername(mobile)+".json")
-			}
-			if err := s.saveLocked(); err != nil {
-				return Account{}, false, err
-			}
-			return *a, false, nil
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
 		}
 	}
+	return true
+}
+
+// AccountPhoneFromRemote 取账户手机号：优先已解密 third_account，其次 mobile；均须为 11 位。
+func AccountPhoneFromRemote(mobile, thirdAccount string) string {
+	if IsCNMobile(thirdAccount) {
+		return strings.TrimSpace(thirdAccount)
+	}
+	if IsCNMobile(mobile) {
+		return strings.TrimSpace(mobile)
+	}
+	return ""
+}
+
+// AccountKeyFromRemote 兼容旧调用；仅返回合法 11 位手机号，否则空字符串。
+func AccountKeyFromRemote(mobile, thirdAccount string, externalID int) string {
+	_ = externalID
+	return AccountPhoneFromRemote(mobile, thirdAccount)
+}
+
+// UpsertFromRemote 按 mobile 更新或新增；已存在时保留 Enabled 状态。
+func (s *Store) UpsertFromRemote(mobile, password, shopName string, externalID, supplierID int, platformKey string) (Account, bool, error) {
+	return s.UpsertFromRemoteKey(AccountPhoneFromRemote(mobile, ""), password, shopName, externalID, supplierID, platformKey)
+}
+
+// UpsertFromRemoteKey 按手机号合并账户：相同手机号只保留一条；非 11 位用户名拒绝写入。
+func (s *Store) UpsertFromRemoteKey(username, password, shopName string, externalID, supplierID int, platformKey string) (Account, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	username = strings.TrimSpace(username)
+	if !IsCNMobile(username) {
+		return Account{}, false, fmt.Errorf("账户手机号无效（须为11位数字）")
+	}
+	dir := filepath.Join(filepath.Dir(s.path), "cookies")
+
+	// 1) 同手机号直接去重合并（含历史 phone_54 后缀残留）
+	if idx := s.findPhoneIndexLocked(username); idx >= 0 {
+		keepID := s.data.Accounts[idx].ID
+		s.dropOtherPhoneLocked(username, keepID)
+		if externalID > 0 {
+			s.dropOtherExternalLocked(externalID, keepID)
+		}
+		idx = s.indexByIDLocked(keepID)
+		return s.updateRemoteLocked(&s.data.Accounts[idx], username, password, shopName, externalID, supplierID, platformKey, dir)
+	}
+
+	// 2) 按 external_id 更新旧密文账户，并清掉同 id / 同号残留
+	if externalID > 0 {
+		keep := -1
+		for i := range s.data.Accounts {
+			if s.data.Accounts[i].ExternalID == externalID {
+				keep = i
+				break
+			}
+		}
+		if keep >= 0 {
+			keepID := s.data.Accounts[keep].ID
+			s.dropOtherExternalLocked(externalID, keepID)
+			s.dropOtherPhoneLocked(username, keepID)
+			keep = s.indexByIDLocked(keepID)
+			return s.updateRemoteLocked(&s.data.Accounts[keep], username, password, shopName, externalID, supplierID, platformKey, dir)
+		}
+	}
+
 	a := Account{
 		ID:          newID(),
-		Username:    mobile,
+		Username:    username,
 		Password:    password,
-		CookiePath:  filepath.Join(dir, SafeUsername(mobile)+".json"),
+		CookiePath:  filepath.Join(dir, SafeUsername(username)+".json"),
 		Enabled:     true,
 		LastStatus:  "idle",
 		ExternalID:  externalID,
@@ -258,6 +338,97 @@ func (s *Store) UpsertFromRemote(mobile, password, shopName string, externalID, 
 		return Account{}, false, err
 	}
 	return a, true, nil
+}
+
+func (s *Store) findPhoneIndexLocked(phone string) int {
+	for i := range s.data.Accounts {
+		u := s.data.Accounts[i].Username
+		if u == phone || strings.HasPrefix(u, phone+"_") {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Store) indexByIDLocked(id string) int {
+	for i := range s.data.Accounts {
+		if s.data.Accounts[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Store) dropOtherPhoneLocked(phone, keepID string) {
+	out := s.data.Accounts[:0]
+	for _, a := range s.data.Accounts {
+		if a.ID != keepID && (a.Username == phone || strings.HasPrefix(a.Username, phone+"_")) {
+			continue
+		}
+		out = append(out, a)
+	}
+	s.data.Accounts = out
+}
+
+func (s *Store) dropOtherExternalLocked(externalID int, keepID string) {
+	out := s.data.Accounts[:0]
+	for _, a := range s.data.Accounts {
+		if a.ID != keepID && a.ExternalID == externalID {
+			continue
+		}
+		out = append(out, a)
+	}
+	s.data.Accounts = out
+}
+
+func (s *Store) updateRemoteLocked(a *Account, username, password, shopName string, externalID, supplierID int, platformKey string, dir string) (Account, bool, error) {
+	a.Username = username
+	a.Password = password
+	a.ShopName = shopName
+	a.ExternalID = externalID
+	a.SupplierID = supplierID
+	a.PlatformKey = platformKey
+	wantPath := filepath.Join(dir, SafeUsername(username)+".json")
+	if a.CookiePath == "" || looksLikeHexCipherUsername(filepath.Base(a.CookiePath)) {
+		a.CookiePath = wantPath
+	}
+	if err := s.saveLocked(); err != nil {
+		return Account{}, false, err
+	}
+	return *a, false, nil
+}
+
+// PruneInvalidPhones 删除用户名不是 11 位手机号的账户（密文/shop_id 残留）。
+func (s *Store) PruneInvalidPhones() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	out := s.data.Accounts[:0]
+	for _, a := range s.data.Accounts {
+		if IsCNMobile(a.Username) {
+			out = append(out, a)
+			continue
+		}
+		n++
+	}
+	s.data.Accounts = out
+	if n == 0 {
+		return 0, nil
+	}
+	return n, s.saveLocked()
+}
+
+func looksLikeHexCipherUsername(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 32 || len(s)%2 != 0 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Enabled() []Account {

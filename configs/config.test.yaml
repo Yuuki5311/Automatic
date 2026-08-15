@@ -52,6 +52,12 @@ scraper:
     - name: "三角洲行动"
       url: "/workbench/recycle/deltaforce"
       table_count: 1
+    - name: "和平精英"
+      url: "/workbench/recycle/peace"
+      table_count: 1
+    - name: "王者荣耀"
+      url: "/workbench/recycle/wangzhe"
+      table_count: 1
 
 captcha:
   provider: "opencv"       # 与生产一致：优先 OpenCV 本地识别

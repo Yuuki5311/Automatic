@@ -13,9 +13,50 @@ import (
 	"github.com/example/jiaoyimao-scraper/internal/config"
 	"github.com/example/jiaoyimao-scraper/internal/models"
 	"github.com/example/jiaoyimao-scraper/internal/scrapehistory"
+	"github.com/example/jiaoyimao-scraper/internal/scraper"
 	"github.com/example/jiaoyimao-scraper/internal/statsstore"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
+
+func TestBoardRun_SyncCookiesBeforeRunCalled(t *testing.T) {
+	dir := t.TempDir()
+	as := accounts.NewStore(filepath.Join(dir, "accounts.json"))
+	_ = as.Load()
+	_, _ = as.Add("u1", "p")
+	st := status.NewStore()
+	calls := 0
+	r := &BoardRun{
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: filepath.Join(dir, "stats")}},
+		Store:    st,
+		Accounts: as,
+		NewContext: func(int) (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		},
+		SyncCookiesBeforeRun: func() (int, error) {
+			calls++
+			return 3, nil
+		},
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
+			return validCookie(), nil
+		},
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
+			return models.BoardStatsSnapshot{
+				Date: "2026-08-12",
+				Games: []models.GameBoardStats{{
+					GameName: "原神",
+					Metrics:  []models.BoardMetric{{Title: "咨询量", Value: "1"}},
+				}},
+			}, nil
+		},
+		Save: statsstore.Save,
+	}
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("SyncCookiesBeforeRun calls=%d", calls)
+	}
+}
 
 func TestBoardRun_SkipsFailedAccountContinues(t *testing.T) {
 	dir := t.TempDir()
@@ -78,7 +119,7 @@ func TestBoardRun_SkipsFailedAccountContinues(t *testing.T) {
 	if snap.ScrapeHistory[0].Account != "good" || snap.ScrapeHistory[0].Status != "ok" {
 		t.Fatalf("hist0=%+v", snap.ScrapeHistory[0])
 	}
-	if snap.ScrapeHistory[1].Account != "bad" || snap.ScrapeHistory[1].Status != "skipped" {
+	if snap.ScrapeHistory[1].Account != "bad" || snap.ScrapeHistory[1].Status != "failed" || snap.ScrapeHistory[1].Error != "登录失败" {
 		t.Fatalf("hist1=%+v", snap.ScrapeHistory[1])
 	}
 }
@@ -155,7 +196,7 @@ func TestBoardRunCookieFailureMarksLoginFailed(t *testing.T) {
 	r.Run()
 
 	got, ok := as.Get(acct.ID)
-	if !ok || got.LastStatus != "skipped" || got.LastError != "login denied" {
+	if !ok || got.LastStatus != "skipped" || got.LastError != "登录失败" {
 		t.Fatalf("account=%+v ok=%v", got, ok)
 	}
 	snap := st.Snapshot()
@@ -216,6 +257,125 @@ func TestBoardRunKeepsMetricsOnSaveFailure(t *testing.T) {
 	fresh, _ := as.Get(got.ID)
 	if fresh.LastStatus != "skipped" || fresh.LastError != "disk full" {
 		t.Fatalf("account=%+v", fresh)
+	}
+}
+
+func TestBoardRun_CookieFailRefreshStillFailDisables(t *testing.T) {
+	dir := t.TempDir()
+	as := accounts.NewStore(filepath.Join(dir, "accounts.json"))
+	_ = as.Load()
+	a, _ := as.Add("u1", "p")
+	st := status.NewStore()
+	refreshCalls := 0
+	r := &BoardRun{
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: filepath.Join(dir, "stats")}},
+		Store:    st,
+		Accounts: as,
+		NewContext: func(int) (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		},
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
+			return validCookie(), nil
+		},
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
+			return models.BoardStatsSnapshot{}, errors.New("Cookie 失效 / SESSION expired")
+		},
+		RefreshCookies: func(acct accounts.Account) (*models.CookieData, error) {
+			refreshCalls++
+			return nil, errors.New("leyoo empty")
+		},
+		Save: statsstore.Save,
+	}
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refreshCalls=%d", refreshCalls)
+	}
+	got, _ := as.Get(a.ID)
+	if got.Enabled {
+		t.Fatalf("should disable after refresh fail: %+v", got)
+	}
+	if got.LastError != "登录失败" {
+		t.Fatalf("LastError=%q", got.LastError)
+	}
+}
+
+func TestBoardRun_HardGameFailStillSavesAndMarksFailed(t *testing.T) {
+	dir := t.TempDir()
+	as := accounts.NewStore(filepath.Join(dir, "accounts.json"))
+	_ = as.Load()
+	_, _ = as.Add("u1", "p")
+	st := status.NewStore()
+	hist := scrapehistory.NewStore(filepath.Join(dir, "scrape_history.json"))
+	_ = hist.Load()
+	r := &BoardRun{
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: filepath.Join(dir, "stats")}},
+		Store:    st,
+		Accounts: as,
+		History:  hist,
+		NewContext: func(int) (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		},
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
+			return validCookie(), nil
+		},
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
+			return models.BoardStatsSnapshot{
+				Date: "2026-08-12",
+				Games: []models.GameBoardStats{{
+					GameName: "原神",
+					Metrics:  []models.BoardMetric{{Title: "咨询量", Value: "1"}},
+				}},
+			}, &scraper.HardGameScrapeError{Games: []string{"鸣潮"}}
+		},
+		Save: statsstore.Save,
+	}
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stats", "2026-08-12", "u1.json")); err != nil {
+		t.Fatalf("should save ok games: %v", err)
+	}
+	snap := st.Snapshot()
+	if len(snap.ScrapeHistory) != 1 || snap.ScrapeHistory[0].Status != "failed" || snap.ScrapeHistory[0].Error != "抓取鸣潮失败" {
+		t.Fatalf("hist=%+v", snap.ScrapeHistory)
+	}
+	if snap.LastRun == nil || !snap.LastRun.Success || snap.LastRun.OkAccounts != 1 {
+		t.Fatalf("last=%+v", snap.LastRun)
+	}
+}
+
+func TestBoardRun_PrivilegeOnlyNotFailed(t *testing.T) {
+	dir := t.TempDir()
+	as := accounts.NewStore(filepath.Join(dir, "accounts.json"))
+	_ = as.Load()
+	_, _ = as.Add("u1", "p")
+	st := status.NewStore()
+	hist := scrapehistory.NewStore(filepath.Join(dir, "scrape_history.json"))
+	_ = hist.Load()
+	r := &BoardRun{
+		Cfg:      &config.Config{Scraper: config.ScraperConfig{StatsDir: filepath.Join(dir, "stats")}},
+		Store:    st,
+		Accounts: as,
+		History:  hist,
+		NewContext: func(int) (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		},
+		PrepAccountCookies: func(context.Context, accounts.Account) (*models.CookieData, error) {
+			return validCookie(), nil
+		},
+		ScrapeAccount: func(context.Context, accounts.Account, *models.CookieData) (models.BoardStatsSnapshot, error) {
+			return models.BoardStatsSnapshot{Date: "2026-08-12"}, nil
+		},
+		Save: statsstore.Save,
+	}
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	snap := st.Snapshot()
+	if len(snap.ScrapeHistory) != 1 || snap.ScrapeHistory[0].Status != "ok" || snap.ScrapeHistory[0].Error != "" {
+		t.Fatalf("privilege-only should be ok hist=%+v", snap.ScrapeHistory)
 	}
 }
 

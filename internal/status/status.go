@@ -53,6 +53,9 @@ type Snapshot struct {
 	Games         []GameResult    `json:"games"`
 	Accounts      []AccountStatus `json:"accounts,omitempty"`
 	ScrapeHistory []HistoryEntry  `json:"scrape_history,omitempty"`
+	CronExpr      string          `json:"cron_expr,omitempty"`
+	ScheduleTime  string          `json:"schedule_time,omitempty"` // HH:MM
+	ScheduleLabel string          `json:"schedule_label,omitempty"` // 每天 HH:MM
 	ServerTime    time.Time       `json:"server_time"`
 }
 
@@ -175,6 +178,15 @@ func (s *Store) SetDaemonState(st DaemonState) {
 	s.snap.DaemonState = st
 }
 
+// SetSchedule 设置定时展示信息（供 UI 时间选择器与文案）。
+func (s *Store) SetSchedule(expr, hhmm, label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snap.CronExpr = expr
+	s.snap.ScheduleTime = hhmm
+	s.snap.ScheduleLabel = label
+}
+
 // SetPhase 设置当前阶段。
 func (s *Store) SetPhase(p Phase) {
 	s.mu.Lock()
@@ -230,7 +242,7 @@ func (s *Store) RunFinished(err error, totalOrders, okAccounts, skippedAccounts 
 	s.snap.Phase = PhaseIdle
 }
 
-// SetStatsDate 写入当前轮次的看板统计日期（昨日 YYYY-MM-DD）。
+// SetStatsDate 写入当前轮次的看板统计日期（抓取执行日 YYYY-MM-DD）。
 func (s *Store) SetStatsDate(date string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

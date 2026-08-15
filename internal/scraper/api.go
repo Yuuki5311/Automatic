@@ -19,6 +19,45 @@ import (
 
 var errCookieExpired = errors.New("Cookie已过期")
 
+// errNoPrivilege 店铺无该游戏看板权限（没有对应接口）。
+var errNoPrivilege = errors.New("店铺无此游戏看板权限")
+
+// errNoBoardData 接口已通但当日无指标（不算抓取失败）。
+var errNoBoardData = errors.New("无看板指标数据")
+
+// errConfirmedGameQuery 已确认店铺开通该游戏看板，但指标查询/解析失败（记为抓取失败）。
+var errConfirmedGameQuery = errors.New("已开通游戏但查询失败")
+
+// IsNoPrivilege 判断是否为「店铺无此游戏接口」类错误（登录成功但不应记为抓取失败）。
+func IsNoPrivilege(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errNoPrivilege) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "NO_PRIVILEGE") || strings.Contains(msg, "FAIL_BIZ_NO_PRIVILEGE")
+}
+
+// IsConfirmedGameQueryFail 已确认开通该游戏，但无法查出指标。
+func IsConfirmedGameQueryFail(err error) bool {
+	return err != nil && errors.Is(err, errConfirmedGameQuery)
+}
+
+// HardGameScrapeError 表示登录有效，且已确认开通的游戏查询失败。
+// 调用方可用 errors.As 取出游戏名；若 Snapshot 中已有成功游戏，仍应落盘/同步。
+type HardGameScrapeError struct {
+	Games []string
+}
+
+func (e *HardGameScrapeError) Error() string {
+	if e == nil || len(e.Games) == 0 {
+		return "抓取游戏失败"
+	}
+	return "抓取" + strings.Join(e.Games, "、") + "失败"
+}
+
 var mtopBaseURL = "https://mtop.jiaoyimao.com"
 
 const (
@@ -31,6 +70,8 @@ const (
 	gameIDHSR       = 2000334 // 崩坏：星穹铁道
 	gameIDWuthering = 2007615 // 鸣潮
 	gameIDDelta     = 2007840 // 三角洲行动
+	gameIDPeace     = 1006473 // 和平精英
+	gameIDWangzhe   = 1002416 // 王者荣耀
 )
 
 // gameNameToID 游戏名 → MTOP gameId 映射
@@ -41,6 +82,15 @@ var gameNameToID = map[string]int{
 	"崩坏：星穹铁道": gameIDHSR,
 	"鸣潮":      gameIDWuthering,
 	"三角洲行动":   gameIDDelta,
+	"和平精英":    gameIDPeace,
+	"王者荣耀":    gameIDWangzhe,
+}
+
+// BoardGameNames 返回看板抓取支持的游戏名（稳定顺序）。
+func BoardGameNames() []string {
+	return []string{
+		"火影忍者", "原神", "绝区零", "崩坏：星穹铁道", "鸣潮", "三角洲行动", "和平精英", "王者荣耀",
+	}
 }
 
 type apiClient struct {
@@ -103,7 +153,10 @@ func (c *apiClient) FetchRecycleOrders(ctx context.Context, gameName string, tab
 	return nil, nil
 }
 
-// FetchBoardStats 通过 MTOP recyclestats API 获取指定游戏的昨日看板指标。
+// BoardStatsTimeKey 看板统计时间维度：本月（月初至今），与商户后台「本月」一致。
+const BoardStatsTimeKey = "month"
+
+// FetchBoardStats 通过 MTOP recyclestats API 获取指定游戏的本月（月初至今）看板指标。
 func (c *apiClient) FetchBoardStats(ctx context.Context, gameName string) (models.GameBoardStats, error) {
 	gameID, ok := gameNameToID[gameName]
 	if !ok {
@@ -210,6 +263,9 @@ func ParseRecycleStatsJSON(gameName string, gameID int, body []byte) (models.Gam
 		if strings.Contains(msg, "SESSION") || strings.Contains(msg, "TOKEN") {
 			return models.GameBoardStats{}, fmt.Errorf("%w: %s", errCookieExpired, msg)
 		}
+		if strings.Contains(msg, "NO_PRIVILEGE") {
+			return models.GameBoardStats{}, fmt.Errorf("%w: %s", errNoPrivilege, msg)
+		}
 		return models.GameBoardStats{}, fmt.Errorf("API错误: %s", msg)
 	}
 
@@ -224,7 +280,7 @@ func ParseRecycleStatsJSON(gameName string, gameID int, body []byte) (models.Gam
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(mtopResp.Data, &data); err != nil {
-		return models.GameBoardStats{}, fmt.Errorf("解析 data 失败: %w", err)
+		return models.GameBoardStats{}, fmt.Errorf("%w: 解析 data 失败: %v", errConfirmedGameQuery, err)
 	}
 
 	metrics := make([]models.BoardMetric, 0, len(data.Result))
@@ -236,11 +292,15 @@ func ParseRecycleStatsJSON(gameName string, gameID int, body []byte) (models.Gam
 			Tips:  item.Properties.Tips,
 		})
 	}
+	if len(metrics) == 0 {
+		// SUCCESS 但无指标：接口可达且当日无数据，不算「有游戏却查不到」
+		return models.GameBoardStats{}, fmt.Errorf("%w", errNoBoardData)
+	}
 
 	return models.GameBoardStats{
 		GameName: gameName,
 		GameID:   gameID,
-		TimeKey:  "yesterday",
+		TimeKey:  BoardStatsTimeKey,
 		Metrics:  metrics,
 		RawJSON:  string(mtopResp.Data),
 	}, nil
@@ -250,7 +310,7 @@ func ParseRecycleStatsJSON(gameName string, gameID int, body []byte) (models.Gam
 func (c *apiClient) buildRecycleStatsURL(gameID int) (string, error) {
 	apiName := "mtop.com.jym.merchant.board.recyclestats"
 	version := "1.0"
-	data := fmt.Sprintf(`{"gameId":%d,"time":"yesterday"}`, gameID)
+	data := fmt.Sprintf(`{"gameId":%d,"time":%q}`, gameID, BoardStatsTimeKey)
 	ts := time.Now().UnixMilli()
 
 	sign := mtopSign(c.mtopToken, ts, data)

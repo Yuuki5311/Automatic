@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -133,7 +135,7 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 		{Account: "13800000000", At: time.Now(), Status: "ok"},
 	})
 
-	s, err := New(store, &config.Config{}, nil, nil, nil, nil)
+	s, err := New(store, &config.Config{Scraper: config.ScraperConfig{CronExpr: "0 9 * * *"}}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +148,7 @@ func TestDashboardRendersBoardMetricsAndActions(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"咨询量", "186", "回收成功金额", "9650.00", "元",
-		"立即抓取", "下次定时：每天 09:00",
+		"立即抓取", "下次定时：每天 09:00", "schedule-time", "保存定时",
 		"本阶段未启用",
 		"/api/scrape",
 		"最近抓取",
@@ -289,3 +291,51 @@ func TestDashboardAccountsSection(t *testing.T) {
 		t.Error("立即抓取 handler missing")
 	}
 }
+
+func TestScheduleAPISetsDailyTime(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("scraper:\n  cron_expr: \"0 9 * * *\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := status.NewStore()
+	cfg := &config.Config{Scraper: config.ScraperConfig{CronExpr: "0 9 * * *"}}
+	s, err := New(store, cfg, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetConfigPath(cfgPath)
+	rescheduled := ""
+	s.SetRescheduleFunc(func(expr string) error {
+		rescheduled = expr
+		return nil
+	})
+
+	ts := httptest.NewServer(s.srv.Handler)
+	t.Cleanup(ts.Close)
+	resp, err := http.Post(ts.URL+"/api/schedule", "application/json",
+		strings.NewReader(`{"time":"14:30"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	if rescheduled != "30 14 * * *" {
+		t.Fatalf("rescheduled=%q", rescheduled)
+	}
+	if cfg.Scraper.CronExpr != "30 14 * * *" {
+		t.Fatalf("cfg=%q", cfg.Scraper.CronExpr)
+	}
+	snap := store.Snapshot()
+	if snap.ScheduleTime != "14:30" || snap.ScheduleLabel != "每天 14:30" {
+		t.Fatalf("snap=%+v", snap)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(raw), `cron_expr: "30 14 * * *"`) {
+		t.Fatalf("file=%s", raw)
+	}
+}
+

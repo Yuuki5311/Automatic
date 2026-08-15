@@ -7,13 +7,14 @@ import (
 )
 
 type Config struct {
-	JYM     JYMConfig     `yaml:"jiaoyimao"`
-	Feishu  FeishuConfig  `yaml:"feishu"`
-	Browser BrowserConfig `yaml:"browser"`
-	Scraper ScraperConfig `yaml:"scraper"`
-	Captcha CaptchaConfig `yaml:"captcha"`
-	Web     WebConfig     `yaml:"web"`
-	Log     LogConfig     `yaml:"log"`
+	JYM        JYMConfig        `yaml:"jiaoyimao"`
+	Feishu     FeishuConfig     `yaml:"feishu"`
+	Browser    BrowserConfig    `yaml:"browser"`
+	Scraper    ScraperConfig    `yaml:"scraper"`
+	Captcha    CaptchaConfig    `yaml:"captcha"`
+	Web        WebConfig        `yaml:"web"`
+	Log        LogConfig        `yaml:"log"`
+	Credential CredentialConfig `yaml:"credential"`
 }
 
 type JYMConfig struct {
@@ -68,6 +69,11 @@ type LogConfig struct {
 	File       string `yaml:"file"`        // 日志文件路径，为空则仅输出到控制台
 	MaxSizeMB  int    `yaml:"max_size_mb"` // 单文件大小上限（MB），默认 10
 	MaxBackups int    `yaml:"max_backups"` // 保留的轮转文件数，默认 3
+}
+
+// CredentialConfig leyoo third_account / third_password 解密密钥（AES-128）。
+type CredentialConfig struct {
+	AESKey string `yaml:"aes_key"` // 16 字节密钥；空则读环境变量 THIRDPARTYSYNC_AES_KEY
 }
 
 func Load(path string) (*Config, error) {

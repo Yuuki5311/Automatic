@@ -16,6 +16,7 @@ import (
 const (
 	boardFieldDate         = "日期"
 	boardFieldAccount      = "账号"
+	boardFieldShopName     = "店铺名"
 	boardFieldUID          = "UID"
 	boardFieldGame         = "游戏名称"
 	boardFieldConsult      = "咨询量"
@@ -45,6 +46,7 @@ type boardFieldDef struct {
 var boardFieldDefs = []boardFieldDef{
 	{boardFieldDate, fieldTypeDatetime},
 	{boardFieldAccount, fieldTypeText},
+	{boardFieldShopName, fieldTypeText},
 	{boardFieldUID, fieldTypeText},
 	{boardFieldGame, fieldTypeText},
 	{boardFieldConsult, fieldTypeNumber},
@@ -136,7 +138,8 @@ func (b *BitableOps) listFieldNames(ctx context.Context, tableID string) (map[st
 	return names, nil
 }
 
-// SyncBoardStats 将看板快照写入多维表格：先建字段，再按「日期+账号+游戏」upsert。
+// SyncBoardStats 将看板快照写入多维表格：先建字段，再按「年月+账号+游戏」upsert。
+// 同月覆盖更新（「日期」写为本次抓取日）；跨月新增一行。
 func (b *BitableOps) SyncBoardStats(ctx context.Context, tableID string, snap models.BoardStatsSnapshot) (newCount, updCount int, err error) {
 	if tableID == "" {
 		return 0, 0, fmt.Errorf("board_table_id 为空")
@@ -156,13 +159,19 @@ func (b *BitableOps) SyncBoardStats(ctx context.Context, tableID string, snap mo
 		if dateKey == "" || game == "" {
 			continue
 		}
-		keyToID[boardRecordKey(dateKey, account, game)] = rec.RecordID
+		keyToID[boardMonthRecordKey(dateKey, account, game)] = rec.RecordID
 	}
 
 	var toCreate []map[string]interface{}
+	skipped := 0
 	for _, g := range snap.Games {
+		if !shouldSyncBoardGame(g) {
+			skipped++
+			slog.Info("跳过无数据游戏，不写入飞书", "component", "feishu", "account", snap.Account, "game", g.GameName, "error", g.Error, "metrics", len(g.Metrics))
+			continue
+		}
 		fields := boardGameToFields(snap, g)
-		key := boardRecordKey(snap.Date, snap.Account, g.GameName)
+		key := boardMonthRecordKey(snap.Date, snap.Account, g.GameName)
 		if rid, ok := keyToID[key]; ok {
 			path := fmt.Sprintf("/bitable/v1/apps/%s/tables/%s/records/%s", b.bitableID, tableID, rid)
 			var upd struct {
@@ -193,18 +202,166 @@ func (b *BitableOps) SyncBoardStats(ctx context.Context, tableID string, snap mo
 		newCount += len(batch)
 	}
 
-	slog.Info("看板飞书同步完成", "component", "feishu", "new", newCount, "updated", updCount, "date", snap.Date)
+	slog.Info("看板飞书同步完成", "component", "feishu", "new", newCount, "updated", updCount, "skipped", skipped, "date", snap.Date)
 	return newCount, updCount, nil
+}
+
+// ManualBoardMetricFields 手工补充可写的数字指标列（飞书列名）。
+func ManualBoardMetricFields() []string {
+	return []string{
+		boardFieldConsult,
+		boardFieldQuote,
+		boardFieldOrderCount,
+		boardFieldAmount,
+		boardFieldSuccessRate,
+		boardFieldSatisfaction,
+		boardFieldHomeConsult,
+		boardFieldHomeOrders,
+	}
+}
+
+// UpsertBoardManualRow 手工写入/整行覆盖一条看板记录。
+// metrics 的 key 为飞书列名；值为 nil 或未出现在允许列表中的键表示该列清空。
+// 返回 action 为 "created" 或 "updated"。
+func (b *BitableOps) UpsertBoardManualRow(
+	ctx context.Context,
+	tableID, date, account, shopName, uid, game string,
+	metrics map[string]*float64,
+	scrapedAt time.Time,
+) (action string, err error) {
+	if tableID == "" {
+		return "", fmt.Errorf("board_table_id 为空")
+	}
+	date = strings.TrimSpace(date)
+	account = strings.TrimSpace(account)
+	game = strings.TrimSpace(game)
+	if date == "" || account == "" || game == "" {
+		return "", fmt.Errorf("日期、账号、游戏均不能为空")
+	}
+	if err := b.EnsureBoardFields(ctx, tableID); err != nil {
+		return "", err
+	}
+	fields := manualBoardFields(date, account, shopName, uid, game, metrics, scrapedAt)
+	existing, listErr := b.listAllRecords(ctx, tableID)
+	if listErr != nil {
+		slog.Warn("拉取飞书记录失败，手工行按新增处理", "component", "feishu", "error", listErr)
+	}
+	key := boardMonthRecordKey(date, account, game)
+	for _, rec := range existing {
+		dateKey := boardDateKey(rec.Fields[boardFieldDate])
+		acc := fieldAsString(rec.Fields[boardFieldAccount])
+		g := fieldAsString(rec.Fields[boardFieldGame])
+		if boardMonthRecordKey(dateKey, acc, g) != key {
+			continue
+		}
+		path := fmt.Sprintf("/bitable/v1/apps/%s/tables/%s/records/%s", b.bitableID, tableID, rec.RecordID)
+		var upd struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := b.client.doRequest(ctx, http.MethodPut, path, map[string]interface{}{"fields": fields}, &upd); err != nil {
+			return "", fmt.Errorf("更新手工看板行失败: %w", err)
+		}
+		return "updated", nil
+	}
+
+	path := fmt.Sprintf("/bitable/v1/apps/%s/tables/%s/records/batch_create", b.bitableID, tableID)
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	body := map[string]interface{}{
+		"records": []map[string]interface{}{{"fields": fields}},
+	}
+	if err := b.client.doRequest(ctx, http.MethodPost, path, body, &result); err != nil {
+		return "", fmt.Errorf("新建手工看板行失败: %w", err)
+	}
+	return "created", nil
+}
+
+func manualBoardFields(date, account, shopName, uid, game string, metrics map[string]*float64, scrapedAt time.Time) map[string]interface{} {
+	fields := map[string]interface{}{
+		boardFieldAccount: account,
+		boardFieldGame:    game,
+		boardFieldError:   nil, // 手工补充清空错误信息
+	}
+	if ms := dateStringToMillis(date); ms > 0 {
+		fields[boardFieldDate] = ms
+	}
+	if shopName != "" {
+		fields[boardFieldShopName] = shopName
+	} else {
+		fields[boardFieldShopName] = nil
+	}
+	if uid != "" {
+		fields[boardFieldUID] = uid
+	} else {
+		fields[boardFieldUID] = nil
+	}
+	if scrapedAt.IsZero() {
+		scrapedAt = time.Now()
+	}
+	fields[boardFieldScrapedAt] = scrapedAt.Format("2006-01-02 15:04:05")
+
+	allowed := make(map[string]struct{}, len(ManualBoardMetricFields()))
+	for _, name := range ManualBoardMetricFields() {
+		allowed[name] = struct{}{}
+		fields[name] = nil // 默认清空，再填有值的
+	}
+	for k, v := range metrics {
+		if _, ok := allowed[k]; !ok {
+			continue
+		}
+		if v == nil {
+			fields[k] = nil
+			continue
+		}
+		fields[k] = *v
+	}
+	return fields
+}
+
+// shouldSyncBoardGame 仅同步有可写入指标的游戏；失败/无权限/空数据跳过。
+func shouldSyncBoardGame(g models.GameBoardStats) bool {
+	if strings.TrimSpace(g.Error) != "" {
+		return false
+	}
+	for _, m := range g.Metrics {
+		if _, ok := metricTitleToField[m.Title]; !ok {
+			continue
+		}
+		if _, ok := parseMetricNumber(m.Value); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func boardRecordKey(date, account, game string) string {
 	return date + "|" + account + "|" + game
 }
 
+// boardYearMonth 取 YYYY-MM；用于同月覆盖判断。
+func boardYearMonth(date string) string {
+	date = strings.TrimSpace(date)
+	if len(date) >= 7 {
+		return date[:7]
+	}
+	return date
+}
+
+// boardMonthRecordKey 同月同账号同游戏视为同一行。
+func boardMonthRecordKey(date, account, game string) string {
+	return boardYearMonth(date) + "|" + account + "|" + game
+}
+
 func boardGameToFields(snap models.BoardStatsSnapshot, g models.GameBoardStats) map[string]interface{} {
 	fields := map[string]interface{}{
 		boardFieldGame:    g.GameName,
 		boardFieldAccount: snap.Account,
+	}
+	if snap.ShopName != "" {
+		fields[boardFieldShopName] = snap.ShopName
 	}
 	if snap.UID != "" {
 		fields[boardFieldUID] = snap.UID

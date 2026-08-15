@@ -9,15 +9,20 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/example/jiaoyimao-scraper/internal/accounts"
+	"github.com/example/jiaoyimao-scraper/internal/accountsync"
 	"github.com/example/jiaoyimao-scraper/internal/auth"
 	"github.com/example/jiaoyimao-scraper/internal/browser"
 	"github.com/example/jiaoyimao-scraper/internal/captcha"
 	"github.com/example/jiaoyimao-scraper/internal/config"
+	"github.com/example/jiaoyimao-scraper/internal/feishu"
 	"github.com/example/jiaoyimao-scraper/internal/leyoo"
+	"github.com/example/jiaoyimao-scraper/internal/scrapehistory"
+	"github.com/example/jiaoyimao-scraper/internal/scraper"
 	"github.com/example/jiaoyimao-scraper/internal/status"
 )
 
@@ -34,12 +39,15 @@ type Server struct {
 	browserMgr    *browser.Manager
 	captchaSolver captcha.Solver
 	accounts      *accounts.Store
+	history       *scrapehistory.Store
 	leyoo         *leyoo.Client
 	scrapeFn      func()
 	scrapeMu      sync.Mutex
 	scraping      bool
 	pullMu        sync.Mutex
 	pulling       bool
+	configPath    string
+	rescheduleFn  func(expr string) error
 }
 
 // New 创建 Web 服务器。
@@ -72,6 +80,7 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/cookies", s.handleCookies)
 	mux.HandleFunc("/api/scrape", s.handleScrape)
+	mux.HandleFunc("/api/schedule", s.handleSchedule)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/accounts", s.handleAccountsList)
 	mux.HandleFunc("POST /api/accounts", s.handleAccountsAddRemoved)
@@ -81,8 +90,12 @@ func New(store *status.Store, cfg *config.Config, loginSvc *auth.LoginService,
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.handleAccountDelete)
 	mux.HandleFunc("POST /api/accounts/{id}/cookies", s.handleAccountCookies)
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.handleAccountLogin)
+	mux.HandleFunc("GET /api/board/games", s.handleBoardGames)
+	mux.HandleFunc("GET /api/board/metric-fields", s.handleBoardMetricFields)
+	mux.HandleFunc("POST /api/board/manual", s.handleBoardManual)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	s.refreshAccountStatus()
+	s.SyncScheduleFromConfig()
 
 	return s, nil
 }
@@ -92,6 +105,30 @@ func (s *Server) SetScrapeFunc(fn func()) {
 	s.scrapeMu.Lock()
 	defer s.scrapeMu.Unlock()
 	s.scrapeFn = fn
+}
+
+// SetConfigPath 设置可写回的配置文件路径（用于保存定时时间）。
+func (s *Server) SetConfigPath(path string) {
+	s.configPath = path
+}
+
+// SetRescheduleFunc 注入 cron 热更新回调。
+func (s *Server) SetRescheduleFunc(fn func(expr string) error) {
+	s.rescheduleFn = fn
+}
+
+// SetHistoryStore 注入抓取历史（手工补充成功后追加记录）。
+func (s *Server) SetHistoryStore(h *scrapehistory.Store) {
+	s.history = h
+}
+
+// SyncScheduleFromConfig 把当前配置中的 cron 同步到 status（供 UI 展示）。
+func (s *Server) SyncScheduleFromConfig() {
+	if s.cfg == nil || s.store == nil {
+		return
+	}
+	expr := s.cfg.Scraper.CronExpr
+	s.store.SetSchedule(expr, config.HHMMFromCron(expr), config.CronLabelFromExpr(expr))
 }
 
 // ListenAndServe 启动 HTTP 服务。
@@ -127,6 +164,114 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
+}
+
+func (s *Server) handleBoardGames(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{"games": scraper.BoardGameNames()})
+}
+
+func (s *Server) handleBoardMetricFields(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{"fields": feishu.ManualBoardMetricFields()})
+}
+
+func (s *Server) handleBoardManual(w http.ResponseWriter, r *http.Request) {
+	if s.cfg == nil || s.cfg.Feishu.AppID == "" || s.cfg.Feishu.AppSecret == "" ||
+		s.cfg.Feishu.BitableID == "" || s.cfg.Feishu.BoardTableID == "" ||
+		strings.Contains(s.cfg.Feishu.AppID, "xxxx") {
+		http.Error(w, "飞书未配置", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Date     string              `json:"date"`
+		Account  string              `json:"account"`
+		Game     string              `json:"game"`
+		Metrics  map[string]*float64 `json:"metrics"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "JSON 解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Date = strings.TrimSpace(req.Date)
+	req.Account = strings.TrimSpace(req.Account)
+	req.Game = strings.TrimSpace(req.Game)
+	if req.Date == "" || req.Account == "" || req.Game == "" {
+		http.Error(w, "日期、账号、游戏均不能为空", http.StatusBadRequest)
+		return
+	}
+	if _, err := time.ParseInLocation("2006-01-02", req.Date, time.Local); err != nil {
+		http.Error(w, "日期格式须为 YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	knownGames := map[string]struct{}{}
+	for _, g := range scraper.BoardGameNames() {
+		knownGames[g] = struct{}{}
+	}
+	if _, ok := knownGames[req.Game]; !ok {
+		http.Error(w, "未知游戏: "+req.Game, http.StatusBadRequest)
+		return
+	}
+	allowed := map[string]struct{}{}
+	for _, f := range feishu.ManualBoardMetricFields() {
+		allowed[f] = struct{}{}
+	}
+	for k := range req.Metrics {
+		if _, ok := allowed[k]; !ok {
+			http.Error(w, "未知指标字段: "+k, http.StatusBadRequest)
+			return
+		}
+	}
+
+	shopName, uid := "", ""
+	if s.accounts != nil {
+		if acct, ok := s.accounts.FindByUsername(req.Account); ok {
+			shopName = acct.ShopName
+			cookies, _ := auth.LoadCookies(acct.CookiePath)
+			uid = auth.MemberUID(cookies)
+		} else {
+			http.Error(w, "账户不存在", http.StatusNotFound)
+			return
+		}
+	}
+
+	client := feishu.NewClient(&s.cfg.Feishu)
+	ops := feishu.NewBitableOps(client, s.cfg.Feishu.BitableID)
+	action, err := ops.UpsertBoardManualRow(
+		r.Context(), s.cfg.Feishu.BoardTableID,
+		req.Date, req.Account, shopName, uid, req.Game, req.Metrics, time.Now(),
+	)
+	if err != nil {
+		slog.Error("手工补充飞书失败", "component", "web", "error", err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	if s.history != nil {
+		msg := "手工补充 " + req.Game
+		if err := s.history.Append(req.Account, "manual", msg); err != nil {
+			slog.Warn("写入手工补充历史失败", "component", "web", "error", err)
+		} else {
+			s.syncHistoryToStatus()
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "action": action})
+}
+
+func (s *Server) syncHistoryToStatus() {
+	if s == nil || s.store == nil || s.history == nil {
+		return
+	}
+	list := s.history.List()
+	out := make([]status.HistoryEntry, len(list))
+	for i, e := range list {
+		out[i] = status.HistoryEntry{
+			ID: e.ID, At: e.At, Account: e.Account, Status: e.Status, Error: e.Error,
+		}
+	}
+	s.store.SetScrapeHistory(out)
 }
 
 // handleScrape 异步触发看板抓取。
@@ -166,6 +311,71 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+}
+
+// handleSchedule GET 当前定时；POST {"time":"14:30"} 设置为每天该时刻。
+func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	switch r.Method {
+	case http.MethodGet:
+		snap := s.store.Snapshot()
+		json.NewEncoder(w).Encode(map[string]string{
+			"time":  snap.ScheduleTime,
+			"label": snap.ScheduleLabel,
+			"cron":  snap.CronExpr,
+		})
+	case http.MethodPost:
+		var req struct {
+			Time string `json:"time"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			return
+		}
+		hour, minute, err := config.ParseHHMM(req.Time)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		expr, err := config.DailyCronExpr(hour, minute)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if s.rescheduleFn != nil {
+			if err := s.rescheduleFn(expr); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "定时表达式无效: " + err.Error()})
+				return
+			}
+		}
+		if s.cfg != nil {
+			s.cfg.Scraper.CronExpr = expr
+		}
+		if s.configPath != "" {
+			if err := config.SaveCronExpr(s.configPath, expr); err != nil {
+				slog.Warn("保存 cron_expr 失败", "component", "web", "path", s.configPath, "error", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "定时已生效但写入配置失败: " + err.Error()})
+				return
+			}
+		}
+		label := config.FormatDailyLabel(hour, minute)
+		hhmm := config.HHMMFromCron(expr)
+		if s.store != nil {
+			s.store.SetSchedule(expr, hhmm, label)
+		}
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"time":   hhmm,
+			"label":  label,
+			"cron":   expr,
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleLogin 触发自动登录，异步执行。
@@ -280,7 +490,11 @@ func (s *Server) handleAccountsPull(w http.ResponseWriter, r *http.Request) {
 		if client == nil {
 			client = leyoo.NewClient("")
 		}
-		list, err := client.ListCatBySupplier(req.SupplierID)
+		crypto := accountsync.CryptoFromConfig(s.cfg)
+		if crypto == nil {
+			slog.Warn("未配置 AES 密钥，third_account 将无法解密（设 credential.aes_key 或环境变量 THIRDPARTYSYNC_AES_KEY）", "component", "web")
+		}
+		kept, err := accountsync.SyncCatBySupplier(s.accounts, client, crypto, req.SupplierID)
 		if err != nil {
 			slog.Error("拉取店铺列表失败", "component", "web", "error", err)
 			if s.store != nil {
@@ -288,29 +502,11 @@ func (s *Server) handleAccountsPull(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		for _, remote := range list {
-			acct, _, upsertErr := s.accounts.UpsertFromRemote(
-				remote.Mobile, remote.ThirdPassword, remote.Name,
-				remote.ID, remote.SupplierID, remote.PlatformKey,
-			)
-			if upsertErr != nil {
-				slog.Warn("同步店铺失败", "component", "web", "mobile", remote.Mobile, "error", upsertErr)
-				continue
-			}
-			if err := auth.ImportFromHeader(acct.CookiePath, remote.Cookie, ".jiaoyimao.com"); err != nil {
-				_ = s.accounts.SetEnabled(acct.ID, false, "Cookie 导入失败: "+err.Error())
-				continue
-			}
-			cookies, _ := auth.LoadCookies(acct.CookiePath)
-			if !auth.IsCookieValid(cookies) {
-				_ = s.accounts.SetEnabled(acct.ID, false, "Cookie 无效")
-			}
-		}
 		s.refreshAccountStatus()
 		if s.store != nil {
-			s.store.SetPullPhase(status.PullSuccess, "", len(list))
+			s.store.SetPullPhase(status.PullSuccess, "", kept)
 		}
-		slog.Info("店铺列表已同步", "component", "web", "supplier_id", req.SupplierID, "count", len(list))
+		slog.Info("店铺列表已同步", "component", "web", "supplier_id", req.SupplierID, "kept", kept)
 	}()
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

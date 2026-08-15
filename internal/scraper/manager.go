@@ -96,22 +96,33 @@ func (m *Manager) board() boardFetcher {
 	return m.apiClient
 }
 
-// YesterdayDate 返回 now 所在本地时区的昨日日期（YYYY-MM-DD），与看板 time=yesterday 对齐。
+// YesterdayDate 返回 now 所在本地时区的昨日日期（YYYY-MM-DD）。
 func YesterdayDate(now time.Time) string {
 	return now.In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+// MonthStartDate 返回 now 所在本地时区当月 1 日（YYYY-MM-DD）。
+func MonthStartDate(now time.Time) string {
+	t := now.In(time.Local)
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.Local).Format("2006-01-02")
+}
+
+// ScrapeDayDate 返回执行抓取当日的本地日期（YYYY-MM-DD），写入快照/飞书「日期」。
+func ScrapeDayDate(now time.Time) string {
+	return now.In(time.Local).Format("2006-01-02")
 }
 
 func (m *Manager) ScrapeBoardAll(ctx context.Context) (models.BoardStatsSnapshot, error) {
 	if m.cfg == nil {
 		return models.BoardStatsSnapshot{}, fmt.Errorf("配置为空，无法抓取")
 	}
-	snap := models.BoardStatsSnapshot{Date: YesterdayDate(time.Now()), ScrapedAt: time.Now()}
+	snap := models.BoardStatsSnapshot{Date: ScrapeDayDate(time.Now()), ScrapedAt: time.Now()}
 	fetcher := m.board()
 	if fetcher == nil {
 		return snap, fmt.Errorf("API客户端未初始化（配置缺失）")
 	}
 
-	ok := 0
+	var hardFails []string
 	for _, game := range m.cfg.Scraper.Games {
 		gs, err := fetcher.FetchBoardStats(ctx, game.Name)
 		if err != nil && m.isSessionExpired(err) && m.tryRefresh(ctx) {
@@ -119,21 +130,39 @@ func (m *Manager) ScrapeBoardAll(ctx context.Context) (models.BoardStatsSnapshot
 			gs, err = fetcher.FetchBoardStats(ctx, game.Name)
 		}
 		if err != nil {
-			slog.Warn("看板抓取失败", "component", "scraper", "game", game.Name, "error", err)
-			gs = models.GameBoardStats{GameName: game.Name, TimeKey: "yesterday", Error: err.Error(), FetchedAt: time.Now()}
-			if id, okID := gameNameToID[game.Name]; okID {
-				gs.GameID = id
+			if m.isSessionExpired(err) {
+				slog.Warn("看板会话失效且刷新后仍失败", "component", "scraper", "game", game.Name, "error", err)
+				return snap, fmt.Errorf("登录失败: %w", err)
 			}
-		} else {
-			ok++
+			if IsConfirmedGameQueryFail(err) {
+				slog.Warn("已开通游戏但查询失败", "component", "scraper", "game", game.Name, "error", err)
+				hardFails = append(hardFails, game.Name)
+				if m.report != nil {
+					m.report(game.Name, 0, err)
+				}
+				continue
+			}
+			// 无接口 / 无数据 / 其它未确认开通的查不到 → 跳过，不记失败
+			slog.Info("跳过游戏（无接口或未确认开通）", "component", "scraper", "game", game.Name, "error", err)
+			if m.report != nil {
+				m.report(game.Name, 0, nil)
+			}
+			continue
+		}
+		if len(gs.Metrics) == 0 {
+			slog.Info("看板无指标数据，跳过", "component", "scraper", "game", game.Name)
+			if m.report != nil {
+				m.report(game.Name, 0, nil)
+			}
+			continue
 		}
 		snap.Games = append(snap.Games, gs)
 		if m.report != nil {
-			m.report(game.Name, len(gs.Metrics), err)
+			m.report(game.Name, len(gs.Metrics), nil)
 		}
 	}
-	if ok == 0 {
-		return snap, fmt.Errorf("全部游戏看板抓取失败")
+	if len(hardFails) > 0 {
+		return snap, &HardGameScrapeError{Games: hardFails}
 	}
 	return snap, nil
 }
