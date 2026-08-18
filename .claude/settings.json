@@ -210,7 +210,8 @@
       "WebSearch",
       "Bash(gh repo *)",
       "Bash(curl -s -m 15 https://api.github.com/repos/Yuuki5311/Automatic)",
-      "Bash(git commit -m 'docs: add handover doc and allow WebSearch permission *)"
+      "Bash(git commit -m 'docs: add handover doc and allow WebSearch permission *)",
+      "Bash(git ls-remote *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",
