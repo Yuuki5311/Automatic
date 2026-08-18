@@ -206,7 +206,11 @@
       "Bash(netstat -ano)",
       "Bash(curl -s -m 10 http://127.0.0.1:53172/api/accounts)",
       "Bash(curl -s -m 60 \"https://open.leyoo888.com/open/ck_account/list\" -o /tmp/leyoo_list.json)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "WebSearch",
+      "Bash(gh repo *)",
+      "Bash(curl -s -m 15 https://api.github.com/repos/Yuuki5311/Automatic)",
+      "Bash(git commit -m 'docs: add handover doc and allow WebSearch permission *)"
     ],
     "additionalDirectories": [
       "c:\\Automatic\\internal\\scraper",
